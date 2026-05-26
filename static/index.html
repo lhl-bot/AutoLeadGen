@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>海外客 - 智能外贸获客系统</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/styles.css?v=3.4">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+<!-- Top Navigation -->
+<nav class="top-nav">
+    <div class="logo">海外<span>客</span></div>
+    <div class="nav-right" style="display:flex; align-items:center; gap:12px;">
+        <span id="nav-username" style="color:var(--text-muted); font-size:0.82rem;"></span>
+        <button onclick="logout()" style="background:none; border:1px solid rgba(255,255,255,0.15); color:var(--text-muted); padding:4px 12px; border-radius:6px; cursor:pointer; font-size:0.78rem;">退出</button>
+    </div>
+</nav>
+
+<!-- Sidebar -->
+<div class="sidebar">
+    <div class="menu" style="display:flex; flex-direction:column; flex:1; overflow-y:auto; overflow-x:hidden;">
+        <button class="btn btn-primary" style="margin: 0 24px 16px; width: calc(100% - 48px); justify-content: center; flex-shrink:0;" onclick="startNewSession()">
+            <span>+</span> New Chat
+        </button>
+        
+        <div class="nav-section">WORKSPACE</div>
+        <button class="nav-btn" data-view="pools" onclick="switchView('pools')">📁 客户库管理</button>
+        <button class="nav-btn" data-view="personas" onclick="switchView('personas')">👥 客户画像配置</button>
+        <button class="nav-btn" data-view="workflows" onclick="switchView('workflows')">⚙️ 自动化工作流</button>
+        <button class="nav-btn" data-view="emails" onclick="switchView('emails')">📧 发件邮箱配置</button>
+        <button class="nav-btn" data-view="replies" onclick="switchView('replies')">📨 客户回信跟踪</button>
+        <button class="nav-btn" data-view="email-logs" onclick="switchView('email-logs')">📊 邮件发送记录</button>
+        
+        <div id="admin-menu" style="display:none;">
+            <div class="nav-section" style="margin-top:16px;">ADMIN</div>
+            <button class="nav-btn" data-view="users" onclick="switchView('users')">🛡️ 账号管理</button>
+        </div>
+        
+        <div class="nav-section">ASSISTANT</div>
+        <button class="nav-btn active" data-view="chat" onclick="switchView('chat')">✨ AI 对话助手</button>
+
+        <div class="nav-section">CHAT HISTORY</div>
+        <div id="chat-session-list" style="display:flex; flex-direction:column; gap:4px; margin-bottom:16px;">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+    
+    <div class="sidebar-bottom" style="flex-shrink:0;">
+        <div class="status-dot"></div> System Online
+    </div>
+</div>
+
+<!-- Main Content Area -->
+<div class="app-container">
+
+    <!-- View: User Management -->
+    <div id="view-users" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>账号管理</h2>
+                <p>管理系统用户，创建新账号（仅管理员可见）</p>
+            </div>
+            <button class="btn btn-primary" onclick="showUserModal()">+ 新建账号</button>
+        </div>
+        <div class="card">
+            <div class="table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>用户名</th>
+                            <th>显示名称</th>
+                            <th>权限</th>
+                            <th>状态</th>
+                            <th>创建时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody">
+                        <tr><td colspan="6" style="text-align:center; padding:30px;">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- View: Client Pools -->
+    <div id="view-pools" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>客户库管理</h2>
+                <p>统一管理客户数据，跨工作流去重，避免重复开发</p>
+            </div>
+            <button class="btn btn-primary" onclick="showPoolModal()">+ 新建客户库</button>
+        </div>
+        <div id="pool-list" class="card-grid">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+
+    <!-- View: Personas -->
+    <div id="view-personas" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>客户画像配置</h2>
+                <p>管理您的目标客户群体画像，用于搜索定位和个性化邮件撰写</p>
+            </div>
+            <button class="btn btn-primary" onclick="showPersonaModal()">+ 新建画像</button>
+        </div>
+        <div id="persona-list" class="card-grid">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+
+    <!-- View: Workflows -->
+    <div id="view-workflows" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>工作流管理</h2>
+                <p>设置多条自动化客户开发管线</p>
+            </div>
+            <div style="display:flex; gap:12px;">
+                <button class="btn btn-quick" onclick="showEngineLogsModal()">📜 运行日志 (实时)</button>
+                <button class="btn btn-primary" onclick="showWorkflowModal()">+ 新建工作流</button>
+            </div>
+        </div>
+        <div id="workflow-list" class="card-grid">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+
+    <!-- View: Emails -->
+    <div id="view-emails" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>发件邮箱管理</h2>
+                <p>配置用于轮换发送和接收回信的 SMTP/IMAP 邮箱</p>
+            </div>
+            <button class="btn btn-primary" onclick="showEmailModal()">+ 添加邮箱</button>
+        </div>
+        <div id="email-list" class="card-grid">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+
+    <!-- View: Replies -->
+    <div id="view-replies" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>客户回信跟踪</h2>
+                <p>自动检测意向回复并用 AI 撰写跟进草稿</p>
+            </div>
+            <button class="btn btn-quick" id="btn-refresh-replies" onclick="loadReplies()">🔄 刷新收件箱</button>
+        </div>
+        <div id="reply-list" class="timeline">
+            <!-- Rendered via JS -->
+        </div>
+    </div>
+    
+    <!-- View: Email Logs -->
+    <div id="view-email-logs" class="view-panel" style="display: none;">
+        <div class="panel-header">
+            <div>
+                <h2>邮件发送记录</h2>
+                <p>查看系统自动发送的所有外推邮件</p>
+            </div>
+            <button class="btn btn-quick" id="btn-refresh-logs" onclick="loadEmailLogs()">🔄 刷新记录</button>
+        </div>
+        <div class="leads-table-wrap">
+            <table class="leads-table">
+                <thead>
+                    <tr>
+                        <th>发送时间</th>
+                        <th>收件人</th>
+                        <th>公司/姓名</th>
+                        <th>发件邮箱</th>
+                        <th>主题</th>
+                    </tr>
+                </thead>
+                <tbody id="email-logs-tbody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- View: Chat -->
+    <div id="view-chat" class="chat-container">
+        <div class="chat-header">
+            <div class="header-left">
+                <h1>海外客 AI 助手</h1>
+                <div class="header-subtitle">Search · Discover · Engage</div>
+            </div>
+            <div class="status-badge ready" id="status-badge">
+                <div class="pulse"></div>
+                <span>就绪</span>
+            </div>
+        </div>
+        
+        <div class="progress-bar" id="progress-bar" style="display:none;">
+            <div class="progress-text" id="progress-text">正在分析意图...</div>
+            <div class="progress-inner">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+        </div>
+        
+        <div class="chat-history" id="chat-history">
+            <!-- Welcome Card -->
+            <div class="welcome-card">
+                <h2>海外客 AI 销售助手</h2>
+                <p>智能销售开发助手，全自动搜索、挖掘、触达</p>
+                <div class="welcome-features">
+                    <div class="feature">🔍 搜索全网目标公司</div>
+                    <div class="feature">📧 自动挖掘决策人邮箱</div>
+                    <div class="feature">✨ AI 定制化开发信撰写</div>
+                    <div class="feature">📄 粘贴客户画像智能提取</div>
+                </div>
+                <p class="welcome-hint">输入指令开始，例如：<em>"搜索欧洲的 Padel 设备公司"</em></p>
+            </div>
+        </div>
+        
+        <div class="input-area">
+            <div class="input-wrapper">
+                <button class="upload-btn" id="upload-btn" onclick="document.getElementById('file-upload').click()" title="上传客户画像文件">
+                    📁
+                </button>
+                <input type="file" id="file-upload" style="display: none;" accept=".txt,.md,.csv,.pdf,.docx" onchange="handleFileUpload(event)">
+                <textarea id="message-input" placeholder="输入指令或粘贴客户画像... (Shift+Enter 换行)" rows="1"></textarea>
+                <button class="send-btn" id="send-btn" onclick="sendMessage()">
+                    ↑
+                </button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Email Modal -->
+<div id="email-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>配置发件邮箱</h3>
+            <button class="modal-close" onclick="closeModals()">×</button>
+        </div>
+        <form id="email-form">
+            <div class="form-group">
+                <label>邮箱地址</label>
+                <input type="email" id="smtp-email" required placeholder="如: info@company.com">
+            </div>
+            <div class="form-group">
+                <label>发件人显示名称 (可选)</label>
+                <input type="text" id="smtp-display" placeholder="如: John Doe">
+            </div>
+            <div class="form-row">
+                <div class="form-group" style="flex:2">
+                    <label>SMTP 服务器</label>
+                    <input type="text" id="smtp-host" required placeholder="smtp.example.com">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>端口</label>
+                    <input type="number" id="smtp-port" required value="465">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>授权码 / 密码</label>
+                <input type="password" id="smtp-pass" required>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group" style="flex:2">
+                    <label>IMAP 服务器 (收信监控)</label>
+                    <input type="text" id="imap-host" placeholder="imap.example.com">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>端口</label>
+                    <input type="number" id="imap-port" value="993">
+                </div>
+            </div>
+            
+            <div class="checkbox-row">
+                <label class="checkbox-label"><input type="checkbox" id="smtp-ssl" checked> 使用 SSL</label>
+                <label class="checkbox-label"><input type="checkbox" id="smtp-tls"> 使用 TLS</label>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="testSmtp()">测试发送</button>
+                <button type="button" class="btn" onclick="testImap()">测试收信</button>
+                <button type="submit" class="btn btn-primary">保存配置</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Workflow Modal -->
+<div id="workflow-modal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3>新建工作流</h3>
+            <button class="modal-close" onclick="closeModals()">×</button>
+        </div>
+        <form id="workflow-form">
+            <div class="form-group">
+                <label>工作流名称</label>
+                <input type="text" id="wf-name" required placeholder="例如：北美运动器材开发线">
+            </div>
+            <div class="form-group">
+                <label>搜索关键词 (Company Keywords)</label>
+                <input type="text" id="wf-keywords" required placeholder="如：Padel equipment Europe">
+            </div>
+            <div class="form-group">
+                <label>目标职位 (Job Titles)</label>
+                <input type="text" id="wf-positions" required value="CEO, Owner, Purchasing Manager, Buyer">
+            </div>
+            <div class="form-group">
+                <label>AI 写信提示词 (可选)</label>
+                <textarea id="wf-prompt" class="form-control" rows="3" placeholder="告诉 AI 怎么写邮件，例如：介绍我们的 Padel 球拍，提供首单 20% 折扣..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>📝 邮件签名 (每封邮件末尾自动附加)</label>
+                <textarea id="wf-signature" class="form-control" rows="4" placeholder="Best regards,&#10;Huilong Li&#10;Sales Manager | Peter Patter&#10;peter-patter.com | +86 xxx xxxx"></textarea>
+                <small style="color:var(--text-muted); font-size:0.75rem;">每行一条信息，系统会自动格式化为专业签名</small>
+            </div>
+            <div class="form-group">
+                <label>绑定客户库 (Lead 将归入此库并自动去重)</label>
+                <select id="wf-pool-select" class="form-select">
+                    <option value="">-- 不绑定 --</option>
+                    <!-- Options rendered via JS -->
+                </select>
+            </div>
+            <div class="form-group">
+                <label>绑定客户画像 (可选，自动填充搜索参数)</label>
+                <select id="wf-persona-select" class="form-select" onchange="handlePersonaChange()">
+                    <option value="">-- 不绑定画像 --</option>
+                    <!-- Options rendered via JS -->
+                </select>
+            </div>
+            <div class="form-group">
+                <label>选择绑定的发件邮箱 (轮换发送)</label>
+                <div id="wf-email-checkboxes" class="checkbox-list" style="max-height: 100px; overflow-y: auto; border: 1px solid var(--border); padding: 8px; border-radius: 8px;">
+                    <!-- Checkboxes rendered via JS -->
+                </div>
+            </div>
+            
+            <div class="section-label" style="margin-left:0;">高级发送策略 (Outbound Engine)</div>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>单日最高发送量</label>
+                    <input type="number" id="wf-limit" required value="50">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>最小发信间隔 (秒)</label>
+                    <input type="number" id="wf-min-interval" required value="60">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>最大发信间隔 (秒)</label>
+                    <input type="number" id="wf-max-interval" required value="300">
+                </div>
+            </div>
+            <div class="checkbox-row" style="margin-bottom:16px;">
+                <label class="checkbox-label"><input type="checkbox" id="wf-auto-followup"> 收到回复后允许 AI 自动发送跟进邮件 (默认仅存草稿)</label>
+            </div>
+
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModals()">取消</button>
+                <button type="submit" class="btn btn-primary">保存工作流</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Client Pool Modal -->
+<div id="pool-modal" class="modal">
+    <div class="modal-content" style="max-width: 460px;">
+        <div class="modal-header">
+            <h3>客户库设置</h3>
+            <button class="modal-close" onclick="closeModals()">×</button>
+        </div>
+        <form id="pool-form">
+            <div class="form-group">
+                <label>客户库名称</label>
+                <input type="text" id="pool-name" required placeholder="例如：欧洲体育渠道客户">
+            </div>
+            <div class="form-group">
+                <label>描述 (可选)</label>
+                <textarea id="pool-desc" rows="2" placeholder="客户库用途说明..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>排除域名 (逗号分隔，自动跳过这些公司)</label>
+                <input type="text" id="pool-excluded" placeholder="例如：competitor.com, unwanted.de">
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModals()">取消</button>
+                <button type="submit" class="btn btn-primary">保存客户库</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Persona Modal -->
+<div id="persona-modal" class="modal">
+    <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3>客户画像设置</h3>
+            <button class="modal-close" onclick="closeModals()">×</button>
+        </div>
+        <form id="persona-form">
+            <div class="form-group">
+                <label>画像名称</label>
+                <input type="text" id="persona-name" required placeholder="例如：欧洲 Padel 零售商画像">
+            </div>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>目标行业 (Industry)</label>
+                    <input type="text" id="persona-industry" required placeholder="如：Sports Equipment">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>目标地区 (Countries)</label>
+                    <input type="text" id="persona-countries" required placeholder="如：Europe, Spain, Italy">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>目标职位 (Job Titles，逗号分隔)</label>
+                <input type="text" id="persona-positions" required placeholder="如：CEO, Founder, Buyer">
+            </div>
+            <div class="form-group">
+                <label>公司搜索关键词 (Keywords)</label>
+                <input type="text" id="persona-keywords" required placeholder="如：Padel equipment store, Padel rackets shop">
+            </div>
+            <div class="form-group">
+                <label>排除关键词 (Negative Keywords)</label>
+                <input type="text" id="persona-negative" placeholder="如：manufacturer, factory">
+            </div>
+            <div class="form-group">
+                <label>写信指导 (Email Template Notes)</label>
+                <textarea id="persona-notes" class="form-control" rows="3" placeholder="告诉 AI 针对这类客户如何写信，例如：强调高性价比、提供样品..."></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModals()">取消</button>
+                <button type="submit" class="btn btn-primary">保存画像</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Pool Detail Modal -->
+<div id="pool-detail-modal" class="modal">
+    <div class="modal-content" style="max-width: 820px;">
+        <div class="modal-header">
+            <h3 id="pool-detail-title">客户库详情</h3>
+            <div style="display:flex; gap:12px;">
+                <button class="btn btn-quick" id="btn-export-csv" onclick="exportPoolCSV()">⬇️ 导出 CSV</button>
+                <button class="modal-close" onclick="closeModals()">×</button>
+            </div>
+        </div>
+        <div class="pool-detail-stats" id="pool-detail-stats"></div>
+        <div class="pool-detail-filters">
+            <button class="btn btn-quick filter-btn active" data-status="" onclick="filterPoolLeads('')">全部</button>
+            <button class="btn btn-quick filter-btn" data-status="found" onclick="filterPoolLeads('found')">已发现</button>
+            <button class="btn btn-quick filter-btn" data-status="drafted" onclick="filterPoolLeads('drafted')">已起草</button>
+            <button class="btn btn-quick filter-btn" data-status="sent" onclick="filterPoolLeads('sent')">已发送</button>
+            <button class="btn btn-quick filter-btn" data-status="replied" onclick="filterPoolLeads('replied')">已回复</button>
+        </div>
+        <div class="leads-table-wrap">
+            <table class="leads-table">
+                <thead>
+                    <tr>
+                        <th>姓名</th>
+                        <th>邮箱</th>
+                        <th>领英</th>
+                        <th>公司 / 域名</th>
+                        <th>职位</th>
+                        <th>状态</th>
+                        <th>时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="pool-leads-tbody">
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Lead Edit Modal -->
+<div id="lead-modal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3>编辑客户资料</h3>
+            <button class="modal-close" onclick="closeModals()">×</button>
+        </div>
+        <form id="lead-form">
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>名 (First Name)</label>
+                    <input type="text" id="lead-first-name" placeholder="John">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>姓 (Last Name)</label>
+                    <input type="text" id="lead-last-name" placeholder="Doe">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>邮箱 (Email)</label>
+                <input type="email" id="lead-email" required placeholder="john@example.com">
+            </div>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>公司名称 (Company)</label>
+                    <input type="text" id="lead-company" required placeholder="Acme Corp">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>域名 (Domain)</label>
+                    <input type="text" id="lead-domain" required placeholder="acme.com">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>领英链接 (LinkedIn URL)</label>
+                <input type="url" id="lead-linkedin" placeholder="https://linkedin.com/in/...">
+            </div>
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>职位 (Job Title)</label>
+                    <input type="text" id="lead-job-title" placeholder="CEO">
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>状态 (Status)</label>
+                    <select id="lead-status" class="form-select">
+                        <option value="found">已发现 (found)</option>
+                        <option value="drafted">已起草 (drafted)</option>
+                        <option value="sent">已发送 (sent)</option>
+                        <option value="replied">已回复 (replied)</option>
+                        <option value="bounced">已退信 (bounced)</option>
+                        <option value="rejected">已拒绝 (rejected)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeModals()">取消</button>
+                <button type="submit" class="btn btn-primary">保存客户资料</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Engine Logs Modal -->
+<div id="logs-modal" class="modal">
+    <div class="modal-content" style="max-width: 800px;">
+        <div class="modal-header">
+            <h3>📜 工作流引擎运行日志</h3>
+            <div style="display:flex; gap:12px;">
+                <button class="btn btn-quick" onclick="refreshEngineLogs()">🔄 刷新</button>
+                <button class="modal-close" onclick="closeModals()">×</button>
+            </div>
+        </div>
+        <div style="background: #0d0d0f; border-radius: 8px; border: 1px solid var(--border); margin-top: 16px; padding: 12px; height: 500px; overflow-y: auto;">
+            <pre id="engine-logs-pre" style="color: #a0a0a0; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; margin: 0;"></pre>
+        </div>
+    </div>
+</div>
+
+<!-- User Modal -->
+<div id="user-modal" class="modal">
+    <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-header">
+            <h3>新建账号</h3>
+            <button class="modal-close" onclick="closeUserModal()">×</button>
+        </div>
+        <form id="user-form" onsubmit="saveUser(event)">
+            <div class="form-group">
+                <label>用户名 (登录账号) <span style="color:red">*</span></label>
+                <input type="text" id="user-username" required placeholder="如: sales01">
+            </div>
+            <div class="form-group">
+                <label>初始密码 <span style="color:red">*</span></label>
+                <input type="password" id="user-password" required placeholder="至少6位">
+            </div>
+            <div class="form-group">
+                <label>显示名称</label>
+                <input type="text" id="user-displayname" placeholder="如: 销售张三">
+            </div>
+            <div class="checkbox-row" style="margin-bottom:16px;">
+                <label class="checkbox-label"><input type="checkbox" id="user-isadmin"> 设为超级管理员 (可查看所有数据)</label>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="closeUserModal()">取消</button>
+                <button type="submit" class="btn btn-primary">保存账号</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div id="toast-container" class="toast-container"></div>
+
+<script src="/js/app.js?v=3.8"></script>
+</body>
+</html>

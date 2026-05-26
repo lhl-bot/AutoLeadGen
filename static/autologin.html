@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Auto Login</title>
+</head>
+<body>
+    <script>
+        localStorage.setItem('auth_token', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiYWRtaW4iOnRydWUsImV4cCI6MTc3OTI2Njc3M30.c-GgJ3xiWGhVrBhL7di1lbNFmxswrULoBpnc6P4ScWQ');
+        localStorage.setItem('auth_user', JSON.stringify({id: 1, username: 'admin', is_admin: true}));
+        window.location.href = '/static/index.html';
+    </script>
+</body>
+</html>

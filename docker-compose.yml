@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  autoleadgen:
+    build: .
+    container_name: autoleadgen
+    restart: always
+    network_mode: "host"
+    command: ["gunicorn", "main:app", "--worker-class", "uvicorn.workers.UvicornWorker", "--workers", "1", "--bind", "0.0.0.0:8001", "--timeout", "120", "--graceful-timeout", "30"]
+    dns:
+      - 223.5.5.5
+      - 114.114.114.114
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    volumes:
+      # 持久化日志（可选）
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

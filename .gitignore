@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+eggs/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Database
+*.db
+*.sqlite3
+
+# Scratch / temp scripts
+scratch/
+test-results/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/

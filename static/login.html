@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 海外客</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 48px 40px;
+            width: 420px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .login-logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .login-logo h1 {
+            font-size: 2rem;
+            color: #fff;
+            font-weight: 700;
+        }
+        .login-logo h1 span { color: #7c5cfc; }
+        .login-logo p {
+            color: rgba(255,255,255,0.5);
+            font-size: 0.85rem;
+            margin-top: 6px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            color: rgba(255,255,255,0.7);
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.3s;
+        }
+        .form-group input:focus {
+            border-color: #7c5cfc;
+            box-shadow: 0 0 0 3px rgba(124,92,252,0.2);
+        }
+        .form-group input::placeholder { color: rgba(255,255,255,0.3); }
+        .btn-login {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #7c5cfc, #5a3fd4);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 8px;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(124,92,252,0.4);
+        }
+        .btn-login:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .error-msg {
+            color: #ff6b6b;
+            font-size: 0.82rem;
+            text-align: center;
+            margin-top: 12px;
+            min-height: 20px;
+        }
+        .particles {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: -1;
+        }
+        .particle {
+            position: absolute;
+            width: 4px; height: 4px;
+            background: rgba(124,92,252,0.3);
+            border-radius: 50%;
+            animation: float 15s infinite;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(100vh) scale(0); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-10vh) scale(1); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="particles" id="particles"></div>
+    
+    <div class="login-container">
+        <div class="login-logo">
+            <h1>海外<span>客</span></h1>
+            <p>智能外贸获客系统</p>
+        </div>
+        
+        <form id="login-form" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="username" placeholder="请输入用户名" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="password" placeholder="请输入密码" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn-login" id="btn-login">登 录</button>
+            <div class="error-msg" id="error-msg"></div>
+        </form>
+    </div>
+
+    <script>
+        // Check if already logged in
+        const token = localStorage.getItem('auth_token');
+        if (token) {
+            fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => { if (r.ok) window.location.href = '/index.html'; })
+                .catch(() => {});
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-login');
+            const errEl = document.getElementById('error-msg');
+            errEl.textContent = '';
+            btn.disabled = true;
+            btn.textContent = '登录中...';
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: document.getElementById('username').value,
+                        password: document.getElementById('password').value,
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    localStorage.setItem('auth_token', data.token);
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
+                    window.location.href = '/index.html';
+                } else {
+                    errEl.textContent = data.detail || '登录失败';
+                }
+            } catch (err) {
+                errEl.textContent = '网络错误，请检查连接';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '登 录';
+            }
+        }
+
+        // Create floating particles
+        const container = document.getElementById('particles');
+        for (let i = 0; i < 30; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.left = Math.random() * 100 + '%';
+            p.style.animationDelay = Math.random() * 15 + 's';
+            p.style.animationDuration = (10 + Math.random() * 10) + 's';
+            p.style.width = p.style.height = (2 + Math.random() * 4) + 'px';
+            container.appendChild(p);
+        }
+    </script>
+</body>
+</html>

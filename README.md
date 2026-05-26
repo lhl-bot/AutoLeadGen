@@ -1,4 +1,4 @@
-# AutoLeadGen - AI-Powered B2B Lead Generation Platform
+# haiwaike - AI-Powered B2B Lead Generation Platform
 
 <p align="center">
   <strong>An end-to-end intelligent outbound prospecting system that searches, qualifies, personalizes, and sends emails to B2B leads on autopilot.</strong>

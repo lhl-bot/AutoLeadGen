@@ -25,10 +25,6 @@ const nextConfig: NextConfig = {
         destination: `${backendUrl}/api/email_accounts/`,
       },
       {
-        source: '/api/email_logs',
-        destination: `${backendUrl}/api/email_logs/`,
-      },
-      {
         source: '/api/replies',
         destination: `${backendUrl}/api/replies/`,
       },

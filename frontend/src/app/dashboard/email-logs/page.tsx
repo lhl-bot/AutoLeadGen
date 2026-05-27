@@ -14,7 +14,7 @@ export default function EmailLogsPage() {
   const fetchLogs = async () => {
     setIsLoading(true);
     try {
-      const res = await apiFetch('/api/email_logs/');
+      const res = await apiFetch('/api/email_logs');
       if (res.ok) {
         const data = await res.json();
         setLogs(data);

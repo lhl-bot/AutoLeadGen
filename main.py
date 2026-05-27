@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from database import engine, Base
 from routers import (
     auth, agent, analytics, channels, client_pools,
-    email_accounts, leads, personas, replies, workflows
+    email_accounts, email_logs, leads, personas, replies, workflows
 )
 
 # Initialize database tables
@@ -65,18 +65,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AutoLeadGen API", lifespan=lifespan)
 
 # Configure CORS
+_cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://39.102.113.35",
+    "http://39.102.113.35:3000",
+    "http://39.102.113.35:3001",
+    "http://39.102.113.35:8001",
+    "http://39.102.113.35:8888",
+]
+# Allow additional origins from environment variable
+_env_origins = os.environ.get("CORS_ORIGINS", "")
+if _env_origins:
+    _cors_origins.extend([o.strip() for o in _env_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://39.102.113.35",
-        "http://39.102.113.35:3000",
-        "http://39.102.113.35:3001",
-        "http://39.102.113.35:8001",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,6 +100,7 @@ app.include_router(analytics.router)
 app.include_router(channels.router)
 app.include_router(client_pools.router)
 app.include_router(email_accounts.router)
+app.include_router(email_logs.router)
 app.include_router(leads.router)
 app.include_router(personas.router)
 app.include_router(replies.router)

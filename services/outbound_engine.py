@@ -300,6 +300,10 @@ def _is_email_good_for_lead(email: str, domain: str) -> bool:
 def _mark_lead_suppressed(lead: Lead, reason: str, db) -> None:
     if reason == "missing_email":
         lead.status = "needs_email"
+    elif reason and reason.startswith("fit_score_too_low"):
+        lead.status = "low_score"
+    elif reason and reason.startswith("email_not_verified"):
+        lead.status = "needs_email"  # Can re-verify later
     else:
         lead.status = "invalid_email"
     lead.reply_snippet = f"Suppressed before sending: {reason}"
@@ -494,10 +498,16 @@ async def process_workflow(wf_id: int):
         try:
             drafted_leads = []
             if not email_limit_reached:
-                drafted_leads = db.query(Lead).filter(
+                q = db.query(Lead).filter(
                     Lead.workflow_id == wf_id,
                     Lead.status == "drafted"
-                ).all()
+                )
+                # Pre-filter low-score leads at query level for efficiency
+                if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+                    min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
+                    from sqlalchemy import or_
+                    q = q.filter(or_(Lead.fit_score >= min_score, Lead.fit_score.is_(None)))
+                drafted_leads = q.all()
             
             lead_to_send_id = None
             if drafted_leads:
@@ -531,11 +541,17 @@ async def process_workflow(wf_id: int):
                         can_send = False
                 
                 if can_send:
+                    # Temporary reasons that shouldn't suppress a lead
+                    _TEMP_REASONS = {"outside_working_hours", "domain_cooldown"}
                     for candidate in drafted_leads:
                         is_sendable, reason = _is_lead_sendable_now(candidate, db)
                         if is_sendable:
                             lead_to_send_id = candidate.id
                             break
+                        elif reason not in _TEMP_REASONS:
+                            # Permanently unsendable — mark so it doesn't block the queue
+                            _mark_lead_suppressed(candidate, reason or "unknown", db)
+                            logger.info(f"Suppressed drafted lead {candidate.id} ({candidate.email}): {reason}")
         finally:
             db.close()
         
@@ -647,6 +663,15 @@ async def process_workflow(wf_id: int):
                             db_b.commit()
                             outreach_context = build_outreach_context(workflow_obj, persona_obj, score)
                             persona_id = workflow_obj.persona_id if workflow_obj else None
+                            # ── Score gate: skip drafting for low-fit leads ──
+                            if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+                                min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
+                                if score is not None and score < min_score:
+                                    lead_obj.status = "low_score"
+                                    lead_obj.reply_snippet = f"Skipped: fit_score {score} < {min_score}"
+                                    db_b.commit()
+                                    logger.info(f"Skipping draft for {email}: fit_score={score} < {min_score}")
+                                    return
                         else:
                             persona_id = None
                     finally:
@@ -1298,6 +1323,19 @@ def _is_lead_sendable_now(lead: Lead, db) -> tuple:
     if suppression_reason:
         return False, suppression_reason
 
+    # ── Fit-score gate: skip low-quality leads ──
+    min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
+    if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+        score = getattr(lead, 'fit_score', None)
+        if score is not None and score < min_score:
+            return False, f"fit_score_too_low({score}<{min_score})"
+
+    # ── Email verification gate: only send to verified/catch-all addresses ──
+    if _bool_env("EMAIL_REQUIRE_VERIFIED", True):
+        v_status = getattr(lead, 'email_validation_status', None)
+        if v_status is not None and v_status not in ("valid", "catch-all"):
+            return False, f"email_not_verified({v_status})"
+
     if lead.timezone:
         try:
             import pytz
@@ -1674,6 +1712,10 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
                 _linkedin_cooldown_until = time.time() + cooldown
                 db = SessionLocal()
                 try:
+                    # Mark the lead so it won't be retried after cooldown expires
+                    lead_obj = db.query(Lead).filter(Lead.id == lead_id).first()
+                    if lead_obj:
+                        lead_obj.linkedin_status = "provider_limited"
                     db.add(MessageLog(
                         lead_id=lead_id,
                         channel="linkedin",
@@ -1686,6 +1728,7 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
                     db.close()
                 logger.warning(
                     f"LinkedIn provider limit reached for workflow '{wf_name}'. "
+                    f"Lead {lead_id} marked provider_limited. "
                     f"Pausing LinkedIn invites for {cooldown} seconds."
                 )
                 break

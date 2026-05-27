@@ -223,7 +223,7 @@ def score_lead_fit(
     triggers = HANDOFF_INTENT_TERMS[:]
     if workflow and workflow.manual_handoff_triggers:
         triggers.extend(_split_terms(workflow.manual_handoff_triggers))
-    is_contacted = lead.status not in {"found", "needs_email", "invalid_email", "drafted", "send_failed", "bounced"}
+    is_contacted = lead.status not in {"found", "needs_email", "invalid_email", "drafted", "send_failed", "bounced", "low_score"}
     intent_matches = _matched_terms(lead.reply_snippet or "", HANDOFF_INTENT_TERMS)
     handoff = lead.status == "replied" or (is_contacted and score >= 80) or bool(intent_matches)
     if intent_matches:

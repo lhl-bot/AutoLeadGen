@@ -135,6 +135,7 @@ export interface Workflow {
   needs_email_count?: number
   replied_count?: number
   bounced_count?: number
+  low_score_count?: number
   outbound_count?: number
   bounce_rate?: number
   email_paused?: boolean

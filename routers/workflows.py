@@ -31,16 +31,18 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
                COALESCE(ls.needs_email, 0) AS needs_email_count,
                COALESCE(ls.replied, 0)     AS replied_count
                ,COALESCE(ls.bounced, 0)    AS bounced_count
+               ,COALESCE(ls.low_score, 0)  AS low_score_count
                ,COALESCE(es.outbound_count, 0) AS outbound_count
         FROM workflows w
         LEFT JOIN client_pools cp ON w.client_pool_id = cp.id
         LEFT JOIN (
             SELECT workflow_id,
-                   SUM(CASE WHEN status NOT IN ('rejected', 'invalid_email', 'bounced', 'unsubscribed', 'needs_email') THEN 1 ELSE 0 END) AS total,
-                   SUM(CASE WHEN email IS NOT NULL AND email <> '' AND status NOT IN ('bounced', 'rejected', 'invalid_email', 'unsubscribed') THEN 1 ELSE 0 END) AS contactable,
+                   SUM(CASE WHEN status NOT IN ('rejected', 'invalid_email', 'bounced', 'unsubscribed', 'needs_email', 'low_score') THEN 1 ELSE 0 END) AS total,
+                   SUM(CASE WHEN email IS NOT NULL AND email <> '' AND status NOT IN ('bounced', 'rejected', 'invalid_email', 'unsubscribed', 'low_score') THEN 1 ELSE 0 END) AS contactable,
                    SUM(CASE WHEN status = 'needs_email' THEN 1 ELSE 0 END) AS needs_email,
                    SUM(status = 'replied') AS replied,
                    SUM(status = 'bounced') AS bounced,
+                   SUM(status = 'low_score') AS low_score,
                    AVG(fit_score) AS avg_fit_score,
                    SUM(CASE WHEN handoff_recommended = 1 THEN 1 ELSE 0 END) AS handoff_count
             FROM leads
@@ -137,6 +139,7 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
             "needs_email_count": r["needs_email_count"],
             "replied_count": r["replied_count"],
             "bounced_count": bounced_count,
+            "low_score_count": int(r.get("low_score_count") or 0),
             "outbound_count": outbound_count,
             "bounce_rate": bounce_rate,
             "email_paused": email_paused,

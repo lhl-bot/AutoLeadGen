@@ -162,7 +162,7 @@ class Lead(Base):
     last_name = Column(String(255))
     job_title = Column(String(255))
     linkedin_url = Column(String(500))
-    status = Column(String(50), default="found") # found, drafted, sent, replied, bounced, rejected, unsubscribed, send_failed
+    status = Column(String(50), default="found") # found, drafted, sent, replied, bounced, rejected, unsubscribed, send_failed, invalid_email, needs_email, low_score
     ai_draft = Column(Text)
     send_fail_count = Column(Integer, default=0)
     
@@ -183,7 +183,7 @@ class Lead(Base):
     data_sources = Column(Text, nullable=True, doc="Comma separated data/evidence sources used for this lead")
     
     whatsapp_number = Column(String(50))
-    linkedin_status = Column(String(50), default="unconnected") # unconnected, requested, connected
+    linkedin_status = Column(String(50), default="unconnected") # unconnected, requested, connected, invalid_profile, provider_limited, failed
     linkedin_sent = Column(Boolean, default=False)
     whatsapp_sent = Column(Boolean, default=False)
     

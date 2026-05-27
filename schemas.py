@@ -125,6 +125,7 @@ class WorkflowWithDetails(Workflow):
     needs_email_count: int = 0
     replied_count: int = 0
     bounced_count: int = 0
+    low_score_count: int = 0
     outbound_count: int = 0
     bounce_rate: float = 0
     email_paused: bool = False

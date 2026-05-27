@@ -2,6 +2,7 @@ import imaplib
 import email
 import asyncio
 import re
+import time
 import logging
 from email.header import decode_header
 from email.utils import parseaddr
@@ -171,8 +172,26 @@ def check_inbox_for_replies():
         accounts = db.query(EmailAccount).filter(EmailAccount.imap_host.isnot(None)).all()
         for account in accounts:
             try:
-                mail = imaplib.IMAP4_SSL(account.imap_host, account.imap_port)
-                mail.login(account.email, decrypt_smtp_pass(account.smtp_pass))
+                password = decrypt_smtp_pass(account.smtp_pass)
+
+                # Retry IMAP connection up to 3 times with backoff
+                mail = None
+                for attempt in range(3):
+                    try:
+                        mail = imaplib.IMAP4_SSL(account.imap_host, account.imap_port, timeout=15)
+                        mail.login(account.email, password)
+                        break
+                    except (imaplib.IMAP4.abort, OSError, EOFError) as conn_err:
+                        if attempt < 2:
+                            wait = (attempt + 1) * 3
+                            logger.warning(f"IMAP connect attempt {attempt+1}/3 failed for {account.email}: {conn_err}. Retrying in {wait}s...")
+                            time.sleep(wait)
+                            mail = None
+                        else:
+                            raise
+                if mail is None:
+                    continue
+
                 mail.select("inbox")
                 
                 # Retrieve lookback window

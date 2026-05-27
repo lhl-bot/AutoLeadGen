@@ -368,7 +368,7 @@ export default function PoolsPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2 justify-end">
               <div className="flex flex-wrap gap-1">
-                {['all', 'found', 'drafted', 'sent', 'replied', 'needs_email'].map(s => (
+                {['all', 'found', 'drafted', 'sent', 'replied', 'needs_email', 'low_score'].map(s => (
                   <button
                     key={s}
                     type="button"
@@ -614,6 +614,8 @@ function statusBadgeClass(status: string) {
     case 'send_failed':
     case 'invalid_email':
       return 'bg-rose-100 text-rose-700 border border-rose-200';
+    case 'low_score':
+      return 'bg-orange-100 text-orange-700 border border-orange-200';
     case 'found':
     default:
       return 'bg-slate-100 text-slate-700 border border-slate-200';

@@ -759,7 +759,7 @@ export default function WorkflowsPage() {
                 </div>
 
                 <div className="flex flex-col gap-4 border-t border-white/10 pt-4 xl:ml-6 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
-                  <div className="grid grid-cols-3 gap-5 text-center">
+                  <div className="grid grid-cols-4 gap-5 text-center">
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-white">{wf.leads_count || 0}</span>
                       <span className="text-xs text-gray-500 uppercase">Total</span>
@@ -771,6 +771,10 @@ export default function WorkflowsPage() {
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-amber-400">{wf.needs_email_count || 0}</span>
                       <span className="text-xs text-gray-500 uppercase">Needs Email</span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <span className="text-2xl font-bold text-orange-400">{wf.low_score_count || 0}</span>
+                      <span className="text-xs text-gray-500 uppercase">Low Score</span>
                     </div>
                   </div>
                   

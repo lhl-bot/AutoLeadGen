@@ -503,7 +503,7 @@ async def process_workflow(wf_id: int):
                     Lead.status == "drafted"
                 )
                 # Pre-filter low-score leads at query level for efficiency
-                if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+                if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
                     min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
                     from sqlalchemy import or_
                     q = q.filter(or_(Lead.fit_score >= min_score, Lead.fit_score.is_(None)))
@@ -664,7 +664,7 @@ async def process_workflow(wf_id: int):
                             outreach_context = build_outreach_context(workflow_obj, persona_obj, score)
                             persona_id = workflow_obj.persona_id if workflow_obj else None
                             # ── Score gate: skip drafting for low-fit leads ──
-                            if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+                            if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
                                 min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
                                 if score is not None and score < min_score:
                                     lead_obj.status = "low_score"
@@ -1325,7 +1325,7 @@ def _is_lead_sendable_now(lead: Lead, db) -> tuple:
 
     # ── Fit-score gate: skip low-quality leads ──
     min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
-    if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", True):
+    if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
         score = getattr(lead, 'fit_score', None)
         if score is not None and score < min_score:
             return False, f"fit_score_too_low({score}<{min_score})"

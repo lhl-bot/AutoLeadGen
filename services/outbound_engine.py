@@ -600,15 +600,64 @@ async def process_workflow(wf_id: int):
                 Lead.workflow_id == wf_id,
                 Lead.status == "found"
             ).limit(5).all()
-            lead_infos = [(lead.id, lead.domain, lead.company_name, lead.job_title, lead.email, lead.first_name, lead.last_name) for lead in found_leads]
+            lead_infos = [(lead.id, lead.domain, lead.company_name, lead.job_title, lead.email, lead.first_name, lead.last_name, lead.linkedin_url, lead.whatsapp_number) for lead in found_leads]
         finally:
             db.close()
         
         if lead_infos:
-            async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name):
+            async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name, linkedin_url, whatsapp_number):
                 try:
-                    # 0. Verify email before research & drafting
-                    if email:
+                    # 0. Try LeadContact email enrichment if no email or unverified
+                    has_usable_email = bool(email and email.strip())
+                    if (not has_usable_email) and linkedin_url:
+                        _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
+                        if _lc_key:
+                            from services.leadcontact_client import LeadContactClient
+                            lc = LeadContactClient(_lc_key)
+                            lc_result = lc.query_email_with_validation(linkedin_url)
+                            lc_email = lc_result.get("email")
+                            if lc_email:
+                                email = lc_email
+                                has_usable_email = True
+                                db_lc = SessionLocal()
+                                try:
+                                    lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
+                                    if lead_lc:
+                                        lead_lc.email = lc_email
+                                        lead_lc.email_validation_status = "valid" if lc_result.get("valid") else "catch-all"
+                                        lead_lc.email_verified = bool(lc_result.get("valid"))
+                                        lead_lc.data_sources = (lead_lc.data_sources or "") + ",leadcontact"
+                                        db_lc.commit()
+                                        logger.info(f"[LeadContact] Email found for {linkedin_url}: {lc_email}")
+                                finally:
+                                    db_lc.close()
+                            else:
+                                logger.info(f"[LeadContact] No email found for {linkedin_url}: {lc_result.get('error', 'unknown')}")
+
+                    # 0.1. Try LeadContact phone enrichment if WhatsApp channel is enabled
+                    if linkedin_url and not whatsapp_number and enable_whatsapp:
+                        _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
+                        if _lc_key:
+                            from services.leadcontact_client import LeadContactClient
+                            lc = LeadContactClient(_lc_key)
+                            phone_result = lc.query_phone(linkedin_url)
+                            phones = phone_result.get("phones", [])
+                            if phones:
+                                # Find the first valid phone
+                                best = next((p for p in phones if p["valid"]), phones[0])
+                                whatsapp_number = best["phone"]
+                                db_lc = SessionLocal()
+                                try:
+                                    lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
+                                    if lead_lc:
+                                        lead_lc.whatsapp_number = whatsapp_number
+                                        db_lc.commit()
+                                        logger.info(f"[LeadContact] Phone found for {linkedin_url}: {whatsapp_number}")
+                                finally:
+                                    db_lc.close()
+
+                    # 0.2. Verify email before research & drafting
+                    if has_usable_email:
                         from services.email_verifier import verify_email
                         verif = await verify_email(email)
                         v_status = verif.get("status", "unknown")
@@ -712,7 +761,7 @@ async def process_workflow(wf_id: int):
                     logger.error(f"Error drafting for {email}: {e}")
 
             # Run all draft tasks concurrently
-            tasks = [process_single_lead(lid, d, cn, jt, e, fn, ln) for lid, d, cn, jt, e, fn, ln in lead_infos]
+            tasks = [process_single_lead(lid, d, cn, jt, e, fn, ln, li, wn) for lid, d, cn, jt, e, fn, ln, li, wn in lead_infos]
             await asyncio.gather(*tasks)
             return
 
@@ -931,9 +980,26 @@ def _search_and_extract_leads(
   import os
   batch_lead_limit = batch_lead_limit or _int_env("SEARCH_BATCH_LEAD_LIMIT", 25, 1, 200)
   max_domains = max_domains or _int_env("SEARCH_MAX_DOMAINS_PER_BATCH", 80, 10, 250)
+
+  # Apollo takes priority if configured
   apollo_api_key = os.environ.get("APOLLO_API_KEY")
   if apollo_api_key:
       return _apollo_search_and_extract(wf_id, apollo_api_key, batch_lead_limit=batch_lead_limit)
+
+  # LeadContact: run a targeted employee search in parallel with web search
+  _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
+  if _lc_key:
+      from services.leadcontact_client import LeadContactClient
+      lc = LeadContactClient(_lc_key)
+      if lc.get_credits() >= 50:
+          try:
+              lc_stats = _leadcontact_search_and_extract(wf_id, lc, batch_lead_limit=batch_lead_limit)
+              if lc_stats.get("new_leads", 0) > 0:
+                  return lc_stats
+          except Exception as e:
+              logger.warning(f"LeadContact search failed (will fall back to web search): {e}")
+      else:
+          logger.info(f"LeadContact credits too low ({lc.get_credits()}), skipping search stage")
 
   stats: Dict[str, Any] = {
       "workflow_id": wf_id,
@@ -1189,6 +1255,145 @@ def _search_and_extract_leads(
         stats["status"] = "error"
         stats["error"] = str(e)
         return stats
+
+def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[int] = None) -> Dict[str, Any]:
+    """Search for targeted professionals via LeadContact advanced employee query."""
+    from services.leadcontact_client import LeadContactClient
+
+    batch_lead_limit = batch_lead_limit or _int_env("SEARCH_BATCH_LEAD_LIMIT", 25, 1, 200)
+    max_lc_leads = _int_env("LEADCONTACT_MAX_LEADS_PER_SEARCH", 10, 2, 50)
+    stats: Dict[str, Any] = {
+        "workflow_id": wf_id,
+        "status": "ok",
+        "source": "leadcontact",
+        "new_leads": 0,
+    }
+
+    try:
+        db = SessionLocal()
+        try:
+            wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+            if not wf:
+                return {"status": "error", "error": "workflow_not_found", "source": "leadcontact"}
+            keywords = wf.search_keywords or ""
+            target_role = wf.target_role or ""
+            target_region = wf.target_region or ""
+            product_focus = wf.product_focus or ""
+        finally:
+            db.close()
+
+        # Map product_focus to LeadContact industry list (best-effort match)
+        industry_map = {
+            "padel": "Sporting Goods",
+            "sports": "Sporting Goods",
+            "pickleball": "Sporting Goods",
+            "tennis": "Sporting Goods",
+            "medical": "Medical Device",
+            "pharma": "Pharmaceuticals",
+            "software": "Computer Software",
+            "saas": "Computer Software",
+            "hardware": "Computer Hardware",
+            "fintech": "Financial Services",
+            "logistics": "Logistics & Supply Chain",
+            "construction": "Construction",
+            "education": "Education Management",
+        }
+        industries = []
+        for k, v in industry_map.items():
+            if k in (keywords + product_focus).lower():
+                industries.append(v)
+
+        # Parse job titles from target_role (comma or semicolon separated)
+        job_titles = [t.strip() for t in re.split(r"[,;]", target_role) if t.strip()]
+
+        # Use keywords to build a search query
+        search_keyword = " ".join(keywords.split(",")[:2]).strip()
+
+        logger.info(
+            f"[LeadContact] Searching — titles={job_titles}, keyword={search_keyword}, "
+            f"locations={target_region[:5] if target_region else 'any'}, industries={industries}"
+        )
+
+        result = lc.search_employees(
+            job_titles=job_titles if job_titles else None,
+            locations=[target_region] if target_region else None,
+            industries=industries if industries else None,
+            keyword=search_keyword if search_keyword else None,
+            current_titles_only=True,
+            per_page=min(max_lc_leads, batch_lead_limit),
+        )
+
+        employees = result.get("employees", [])
+        if not employees:
+            logger.info(f"[LeadContact] No employees found for keywords: {search_keyword}")
+            return {"status": "ok", "source": "leadcontact", "new_leads": 0}
+
+        new_leads = 0
+        for emp in employees:
+            emp_email = emp.get("email") or ""
+            emp_name = (emp.get("fullName") or "").strip()
+            emp_title = emp.get("title") or ""
+            emp_company = emp.get("companyName") or ""
+            linkedin_url = emp.get("linkedinUrl", "")
+
+            if not emp_email and not linkedin_url:
+                continue
+
+            domain = ""
+            if "@" in emp_email:
+                domain = emp_email.split("@")[-1]
+
+            # Deduplicate by domain + company or LinkedIn URL
+            db_check = SessionLocal()
+            try:
+                existing = db_check.query(Lead).filter(
+                    Lead.workflow_id == wf_id,
+                    Lead.email == emp_email if emp_email else None,
+                    Lead.linkedin_url == linkedin_url if linkedin_url else None,
+                ).first()
+                if existing:
+                    continue
+            finally:
+                db_check.close()
+
+            # Split name
+            name_parts = emp_name.split(" ", 1)
+            first = name_parts[0] if name_parts else ""
+            last = name_parts[1] if len(name_parts) > 1 else ""
+
+            db_insert = SessionLocal()
+            try:
+                lead = Lead(
+                    workflow_id=wf_id,
+                    email=emp_email if emp_email else None,
+                    first_name=first,
+                    last_name=last,
+                    company_name=emp_company or domain,
+                    domain=domain,
+                    job_title=emp_title,
+                    linkedin_url=linkedin_url,
+                    source_channel="leadcontact",
+                    data_sources="leadcontact",
+                    email_validation_status="valid" if emp_email else None,
+                    email_verified=bool(emp_email),
+                    status="found",
+                )
+                db_insert.add(lead)
+                db_insert.commit()
+                new_leads += 1
+                logger.info(f"[LeadContact] New lead: {emp_email or linkedin_url} @ {emp_company}")
+            finally:
+                db_insert.close()
+
+        stats["new_leads"] = new_leads
+        logger.info(f"[LeadContact] Added {new_leads} leads from LeadContact search")
+    except Exception as e:
+        logger.error(f"[LeadContact] Search stage error: {e}")
+        stats["status"] = "error"
+        stats["error"] = str(e)
+
+    return stats
+
 
 def _apollo_search_and_extract(wf_id: int, api_key: str, batch_lead_limit: Optional[int] = None) -> Dict[str, Any]:
     batch_lead_limit = batch_lead_limit or _int_env("SEARCH_BATCH_LEAD_LIMIT", 25, 1, 200)

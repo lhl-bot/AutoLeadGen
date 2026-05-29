@@ -12,6 +12,10 @@ router = APIRouter(prefix="/api/email_accounts", tags=["email_accounts"])
 @router.post("/", response_model=schemas.EmailAccount)
 def create_email_account(account: schemas.EmailAccountCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     data = account.model_dump()
+    if data.get("smtp_host"):
+        data["smtp_host"] = data["smtp_host"].strip()
+    if data.get("imap_host"):
+        data["imap_host"] = data["imap_host"].strip()
     if data.get("smtp_pass"):
         data["smtp_pass"] = encrypt_smtp_pass(data["smtp_pass"])
     db_account = models.EmailAccount(**data, user_id=user.id)
@@ -37,6 +41,10 @@ def update_email_account(account_id: int, account: schemas.EmailAccountCreate, d
         raise HTTPException(status_code=404, detail="Email Account not found")
     
     update_data = account.model_dump()
+    if update_data.get("smtp_host"):
+        update_data["smtp_host"] = update_data["smtp_host"].strip()
+    if update_data.get("imap_host"):
+        update_data["imap_host"] = update_data["imap_host"].strip()
     if update_data.get("smtp_pass"):
         update_data["smtp_pass"] = encrypt_smtp_pass(update_data["smtp_pass"])
     for key, value in update_data.items():
@@ -91,6 +99,6 @@ def test_imap(account_id: int, db: Session = Depends(get_db), user: models.User 
         imap_host=db_account.imap_host,
         imap_port=db_account.imap_port,
         email_user=db_account.email,
-        email_pass=db_account.smtp_pass
+        email_pass=decrypt_smtp_pass(db_account.smtp_pass)
     )
     return result

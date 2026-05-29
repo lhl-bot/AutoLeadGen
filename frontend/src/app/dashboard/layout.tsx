@@ -24,7 +24,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { cn, apiUrl } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 
@@ -56,17 +56,26 @@ export default function DashboardLayout({
     const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
     if (stored === '1') setDesktopCollapsed(true);
 
-    const userStr = window.localStorage.getItem('auth_user');
-    if (userStr) {
-      try {
-        const user = JSON.parse(userStr);
-        if (user.is_admin) {
-          setIsAdmin(true);
-        }
-      } catch (e) {
-         console.error(e);
+    // Verify admin status from backend, not localStorage
+    fetch(apiUrl('/api/auth/me'), {
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).then(res => {
+      if (res.ok) return res.json();
+      throw new Error('Failed to fetch user');
+    }).then(user => {
+      if (user.is_admin) setIsAdmin(true);
+      // Sync backend truth to localStorage
+      window.localStorage.setItem('auth_user', JSON.stringify(user));
+    }).catch(() => {
+      // Fall back to localStorage if backend unreachable
+      const userStr = window.localStorage.getItem('auth_user');
+      if (userStr) {
+        try {
+          const user = JSON.parse(userStr);
+          if (user.is_admin) setIsAdmin(true);
+        } catch {}
       }
-    }
+    });
   }, [router]);
 
   const handleLogout = () => {

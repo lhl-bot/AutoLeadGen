@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from database import engine, Base
 from routers import (
     auth, agent, analytics, channels, client_pools,
-    email_accounts, email_logs, leads, personas, replies, workflows
+    email_accounts, email_logs, health, leads, personas, replies, workflows
 )
 
 # Initialize database tables
@@ -53,6 +53,12 @@ async def lifespan(app: FastAPI):
     if _env_flag("ENABLE_INBOX_MONITOR_WORKER", False):
         from services.inbox_monitor import run_inbox_monitor_loop
         t = threading.Thread(target=run_in_new_loop, args=(run_inbox_monitor_loop,), name="inbox-monitor", daemon=True)
+        t.start()
+        threads.append(t)
+
+    if _env_flag("ENABLE_OMNICHANNEL_WORKER", False):
+        from services.omnichannel_router import omni_channel_daemon
+        t = threading.Thread(target=run_in_new_loop, args=(omni_channel_daemon,), name="omnichannel-engine", daemon=True)
         t.start()
         threads.append(t)
 
@@ -101,6 +107,7 @@ app.include_router(channels.router)
 app.include_router(client_pools.router)
 app.include_router(email_accounts.router)
 app.include_router(email_logs.router)
+app.include_router(health.router)
 app.include_router(leads.router)
 app.include_router(personas.router)
 app.include_router(replies.router)

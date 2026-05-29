@@ -15,8 +15,20 @@ services:
     env_file:
       - .env
     volumes:
-      # 持久化日志（可选）
       - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build: ./frontend
+    container_name: autoleadgen-frontend
+    restart: always
+    network_mode: "host"
+    environment:
+      - BACKEND_URL=http://127.0.0.1:8001
     logging:
       driver: "json-file"
       options:

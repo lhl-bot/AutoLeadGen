@@ -1,188 +1,153 @@
-"""
-LeadContact API client — email, phone, and employee search via LinkedIn profiles.
-
-API docs: https://api.leadcontact.ai/doc
-"""
-import logging
-import os
-from typing import Optional, Dict, Any, List
 import requests
+import logging
+from typing import List, Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
-
-BASE_URL = "https://api.leadcontact.ai"
-REQUEST_TIMEOUT = 30  # seconds
-
+logger = logging.getLogger("leadcontact_client")
+logger.setLevel(logging.INFO)
 
 class LeadContactClient:
-    """Thin wrapper around the LeadContact REST API."""
-
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.environ.get("LEADCONTACT_API_KEY", "")
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {self.api_key}",
+    """
+    Client for interacting with the LeadContact API to search contacts,
+    query phone numbers, and emails using LinkedIn profile URLs.
+    """
+    
+    def __init__(self, token: str):
+        self.token = token.strip()
+        self.base_url = "https://api.leadcontact.ai/api/rest"
+        self.headers = {
+            "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
-        })
+            "Accept": "application/json"
+        }
 
-    # ── core request helper ──────────────────────────────────────
-
-    def _post(self, path: str, body: Dict[str, Any]) -> Optional[Dict]:
+    def get_credits(self) -> int:
+        """
+        Query remaining API points.
+        Endpoint: GET /credits
+        """
+        url = f"{self.base_url}/credits"
         try:
-            resp = self.session.post(
-                f"{BASE_URL}{path}",
-                json=body,
-                timeout=REQUEST_TIMEOUT,
-            )
+            logger.info(f"[LeadContact] Checking remaining credits...")
+            resp = requests.get(url, headers=self.headers, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("code") == 200:
-                    return data.get("data")
-                logger.warning(f"LeadContact {path} business error: {data.get('msg')}")
+                points = data.get("data", {}).get("remainingPoints", 0)
+                logger.info(f"[LeadContact] Remaining points: {points}")
+                return int(points)
             else:
-                logger.warning(f"LeadContact {path} HTTP {resp.status_code}: {resp.text[:300]}")
-        except requests.RequestException as e:
-            logger.error(f"LeadContact {path} request failed: {e}")
-        return None
-
-    def _get(self, path: str, params: Optional[Dict] = None) -> Optional[Dict]:
-        try:
-            resp = self.session.get(
-                f"{BASE_URL}{path}",
-                params=params,
-                timeout=REQUEST_TIMEOUT,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("code") == 200:
-                    return data.get("data")
-                logger.warning(f"LeadContact {path} business error: {data.get('msg')}")
-            else:
-                logger.warning(f"LeadContact {path} HTTP {resp.status_code}: {resp.text[:300]}")
-        except requests.RequestException as e:
-            logger.error(f"LeadContact {path} request failed: {e}")
-        return None
-
-    # ── public API methods ────────────────────────────────────────
-
-    def query_email(self, linkedin_url: str) -> Optional[str]:
-        """Return a verified email for a LinkedIn profile (10 credits)."""
-        data = self._post("/api/rest/email/query", {"profileUrl": linkedin_url})
-        if not data:
-            return None
-        sources = data.get("sources", [])
-        for src in sources:
-            if src.get("valid") and src.get("email"):
-                return src["email"]
-        # Fallback: return first email even if not marked valid
-        for src in sources:
-            if src.get("email"):
-                return src["email"]
-        return None
+                logger.error(f"[LeadContact] Credits API error {resp.status_code}: {resp.text}")
+                return 0
+        except Exception as e:
+            logger.error(f"[LeadContact] Exception in get_credits: {e}")
+            return 0
 
     def query_email_with_validation(self, linkedin_url: str) -> Dict[str, Any]:
-        """Return email + validation flag (10 credits)."""
-        data = self._post("/api/rest/email/query", {"profileUrl": linkedin_url})
-        if not data:
-            return {"email": None, "valid": False, "error": "api_failed"}
-        sources = data.get("sources", [])
-        for src in sources:
-            if src.get("email"):
-                return {
-                    "email": src["email"],
-                    "valid": bool(src.get("valid")),
-                    "source": src.get("name", "leadcontact"),
-                }
-        return {"email": None, "valid": False, "error": "not_found"}
+        """
+        Query email based on LinkedIn profile URL.
+        Endpoint: POST /email/query
+        Returns: {"email": str or None, "valid": bool, "error": str or None}
+        """
+        url = f"{self.base_url}/email/query"
+        payload = {
+            "profileUrl": linkedin_url
+        }
+        try:
+            logger.info(f"[LeadContact] Querying email for URL: {linkedin_url}")
+            resp = requests.post(url, headers=self.headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                sources = data.get("data", {}).get("sources", [])
+                if sources:
+                    best_source = sources[0]  # Take the first matched email source
+                    return {
+                        "email": best_source.get("email"),
+                        "valid": bool(best_source.get("valid", False)),
+                        "error": None
+                    }
+                return {"email": None, "valid": False, "error": "No email found"}
+            else:
+                logger.error(f"[LeadContact] Email query API error {resp.status_code}: {resp.text}")
+                return {"email": None, "valid": False, "error": f"API error {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[LeadContact] Exception in query_email_with_validation: {e}")
+            return {"email": None, "valid": False, "error": str(e)}
 
     def query_phone(self, linkedin_url: str) -> Dict[str, Any]:
-        """Return phone numbers for a LinkedIn profile (30 credits)."""
-        data = self._post("/api/rest/phone/query", {"profileUrl": linkedin_url})
-        if not data:
-            return {"phones": [], "error": "api_failed"}
-        sources = data.get("sources", [])
-        phones = []
-        for src in sources:
-            if src.get("phone"):
-                phones.append({
-                    "phone": src["phone"],
-                    "valid": bool(src.get("valid")),
-                    "source": src.get("name", "leadcontact"),
-                })
-        return {"phones": phones}
+        """
+        Query phone numbers based on LinkedIn profile URL.
+        Endpoint: POST /phone/query
+        Returns: {"phones": [{"phone": str, "valid": bool}], "error": str or None}
+        """
+        url = f"{self.base_url}/phone/query"
+        payload = {
+            "profileUrl": linkedin_url
+        }
+        try:
+            logger.info(f"[LeadContact] Querying phone for URL: {linkedin_url}")
+            resp = requests.post(url, headers=self.headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                sources = data.get("data", {}).get("sources", [])
+                phones = []
+                for s in sources:
+                    if s.get("phone"):
+                        phones.append({
+                            "phone": s.get("phone"),
+                            "valid": bool(s.get("valid", False))
+                        })
+                return {
+                    "phones": phones,
+                    "error": None if phones else "No phone numbers found"
+                }
+            else:
+                logger.error(f"[LeadContact] Phone query API error {resp.status_code}: {resp.text}")
+                return {"phones": [], "error": f"API error {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[LeadContact] Exception in query_phone: {e}")
+            return {"phones": [], "error": str(e)}
 
     def search_employees(
         self,
         job_titles: Optional[List[str]] = None,
-        companies: Optional[List[str]] = None,
-        domains: Optional[List[str]] = None,
         locations: Optional[List[str]] = None,
         industries: Optional[List[str]] = None,
-        company_sizes: Optional[List[str]] = None,
-        seniorities: Optional[List[str]] = None,
-        skills: Optional[List[str]] = None,
-        keyword: str = "",
+        keyword: Optional[str] = None,
         current_titles_only: bool = True,
-        page_token: str = "",
-        per_page: int = 25,
+        per_page: int = 10
     ) -> Dict[str, Any]:
-        """Search for employees matching criteria (5 credits per result page)."""
-        body: Dict[str, Any] = {
-            "currentTitlesOnly": current_titles_only,
-            "includeRelatedJobTitles": False,
-            "companyFilter": "current",
-        }
+        """
+        Advanced employee search using filters.
+        Endpoint: POST /employess/query/advanced
+        """
+        # Note the spelling "/employess/query/advanced" is used as per API doc.
+        url = f"{self.base_url}/employess/query/advanced"
+        payload = {}
+        
         if job_titles:
-            body["jobTitle"] = job_titles
-        if companies:
-            body["company"] = companies
-        if domains:
-            body["domain"] = domains
+            payload["jobTitle"] = job_titles
         if locations:
-            body["location"] = locations
+            payload["location"] = locations
         if industries:
-            body["industry"] = industries
-        if company_sizes:
-            body["companySize"] = company_sizes
-        if seniorities:
-            body["seniority"] = seniorities
-        if skills:
-            body["skills"] = skills
+            payload["industry"] = industries
         if keyword:
-            body["keyword"] = keyword
-        if page_token:
-            body["nextPageToken"] = page_token
-
-        data = self._post("/api/rest/employess/query/advanced", body)
-        if not data:
-            return {"employees": [], "total_count": 0, "next_page_token": "", "error": "api_failed"}
-
-        employees = data.get("employees", [])
-        return {
-            "employees": employees,
-            "total_count": data.get("totalEmployeeCount", 0),
-            "next_page_token": data.get("nextPageToken", ""),
-            "current_page": data.get("currentPage", 1),
-        }
-
-    def get_employee_profile(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
-        """Get detailed profile for a single LinkedIn URL (5 credits)."""
-        return self._get(
-            "/api/rest/employess/query/linkedin",
-            params={"linkedin_url": linkedin_url},
-        )
-
-    def get_credits(self) -> int:
-        """Return remaining API credits."""
+            payload["keyword"] = keyword
+            
+        payload["currentTitlesOnly"] = current_titles_only
+        
+        # We can pass nextPageToken and other parameters if we support paging
+        # For perPage, let's include it in case the API uses it, but also keep standard keys
+        payload["perPage"] = per_page
+        
         try:
-            resp = self.session.get(
-                f"{BASE_URL}/api/rest/credits",
-                timeout=REQUEST_TIMEOUT,
-            )
+            logger.info(f"[LeadContact] Searching employees: payload={payload}")
+            resp = requests.post(url, headers=self.headers, json=payload, timeout=30)
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("code") == 200 and data.get("data"):
-                    return data["data"].get("remainingPoints", 0)
-        except requests.RequestException as e:
-            logger.error(f"LeadContact credits check failed: {e}")
-        return 0
+                # Return the data object which contains 'employees', 'totalEmployeeCount', etc.
+                return data.get("data", {})
+            else:
+                logger.error(f"[LeadContact] Employee search API error {resp.status_code}: {resp.text}")
+                return {"employees": [], "error": f"API error {resp.status_code}"}
+        except Exception as e:
+            logger.error(f"[LeadContact] Exception in search_employees: {e}")
+            return {"employees": [], "error": str(e)}

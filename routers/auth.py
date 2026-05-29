@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -9,6 +9,7 @@ from services.auth import (
     hash_password, verify_password, create_access_token,
     get_current_user, require_admin
 )
+from middleware.rate_limit import check_login_rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -34,8 +35,10 @@ class UserResponse(BaseModel):
 
 
 @router.post("/login")
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(request: LoginRequest, db: Session = Depends(get_db), req: Request = None):
     """Authenticate user and return JWT token."""
+    if req:
+        check_login_rate_limit(req)
     user = db.query(models.User).filter(models.User.username == request.username).first()
     if not user or not verify_password(request.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
@@ -67,12 +70,13 @@ def create_user(
     admin: models.User = Depends(require_admin)
 ):
     """Create a new user (admin only)."""
-    existing = db.query(models.User).filter(models.User.username == request.username).first()
+    username = request.username.strip()
+    existing = db.query(models.User).filter(models.User.username == username).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"用户名 '{request.username}' 已存在")
     
     new_user = models.User(
-        username=request.username,
+        username=username,
         hashed_password=hash_password(request.password),
         display_name=request.display_name,
         is_admin=request.is_admin,

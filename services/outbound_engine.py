@@ -624,6 +624,9 @@ async def process_workflow(wf_id: int):
                                     lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
                                     if lead_lc:
                                         lead_lc.email = lc_email
+                                        if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in lc_email:
+                                            lead_lc.domain = lc_email.split("@")[-1]
+                                            domain = lead_lc.domain
                                         lead_lc.email_validation_status = "valid" if lc_result.get("valid") else "catch-all"
                                         lead_lc.email_verified = bool(lc_result.get("valid"))
                                         lead_lc.data_sources = (lead_lc.data_sources or "") + ",leadcontact"
@@ -1276,7 +1279,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             if not wf:
                 return {"status": "error", "error": "workflow_not_found", "source": "leadcontact"}
             keywords = wf.search_keywords or ""
-            target_role = wf.target_role or ""
+            target_role = wf.target_positions or ""
             target_region = wf.target_region or ""
             product_focus = wf.product_focus or ""
         finally:
@@ -1346,11 +1349,19 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             # Deduplicate by domain + company or LinkedIn URL
             db_check = SessionLocal()
             try:
-                existing = db_check.query(Lead).filter(
-                    Lead.workflow_id == wf_id,
-                    Lead.email == emp_email if emp_email else None,
-                    Lead.linkedin_url == linkedin_url if linkedin_url else None,
-                ).first()
+                from sqlalchemy import or_
+                conds = []
+                if linkedin_url:
+                    conds.append(Lead.linkedin_url == linkedin_url)
+                if emp_email:
+                    conds.append(Lead.email == emp_email)
+                
+                existing = None
+                if conds:
+                    existing = db_check.query(Lead).filter(
+                        Lead.workflow_id == wf_id,
+                        or_(*conds)
+                    ).first()
                 if existing:
                     continue
             finally:
@@ -1608,30 +1619,43 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
             return
             
         accounts = [we.email_account for we in workflow_emails]
-        
+        if not accounts:
+            return
+            
         # Round Robin
         last_log = db.query(EmailLog).join(Lead).filter(
             Lead.workflow_id == wf.id,
             EmailLog.direction == "outbound"
         ).order_by(EmailLog.sent_at.desc()).first()
         
-        account_to_use = accounts[0]
+        start_index = 0
         if last_log:
             last_email = last_log.from_email
             for i, acc in enumerate(accounts):
                 if acc.email == last_email:
-                    account_to_use = accounts[(i + 1) % len(accounts)]
+                    start_index = (i + 1) % len(accounts)
                     break
 
         per_account_daily_cap = _int_env("EMAIL_MAX_DAILY_PER_ACCOUNT", 15, 1, 500)
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        sent_by_account_today = db.query(EmailLog).filter(
-            EmailLog.direction == "outbound",
-            EmailLog.from_email == account_to_use.email,
-            EmailLog.sent_at >= today,
-        ).count()
-        if sent_by_account_today >= per_account_daily_cap:
-            logger.info(f"Daily cap reached for {account_to_use.email}: {sent_by_account_today}/{per_account_daily_cap}")
+        
+        account_to_use = None
+        for offset in range(len(accounts)):
+            idx = (start_index + offset) % len(accounts)
+            candidate = accounts[idx]
+            sent_by_account_today = db.query(EmailLog).filter(
+                EmailLog.direction == "outbound",
+                EmailLog.from_email == candidate.email,
+                EmailLog.sent_at >= today,
+            ).count()
+            if sent_by_account_today < per_account_daily_cap:
+                account_to_use = candidate
+                break
+            else:
+                logger.info(f"Daily cap reached for {candidate.email}: {sent_by_account_today}/{per_account_daily_cap}, trying next account")
+                
+        if not account_to_use:
+            logger.info(f"All active sender email accounts for workflow '{wf.name}' have reached their daily caps.")
             return
                     
         # Parse subject and body from AI draft

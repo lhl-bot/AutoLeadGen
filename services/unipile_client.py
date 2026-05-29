@@ -14,7 +14,7 @@ class UnipileClient:
     
     def __init__(self):
         self.api_key = os.environ.get("UNIPILE_API_KEY", "")
-        self.dsn = os.environ.get("UNIPILE_DSN", "https://api3.unipile.com:13300")
+        self.dsn = os.environ.get("UNIPILE_DSN", "https://api46.unipile.com:17642")
         self.last_error_status = None
         self.last_error_body = ""
         self.headers = {
@@ -122,10 +122,14 @@ class UnipileClient:
     async def send_whatsapp_message(self, account_id: str, phone_number: str, text: str) -> bool:
         """Sends a WhatsApp message."""
         url = f"{self.dsn}/api/v1/chats"
-        # In Unipile, sending to a new contact creates a chat
+        
+        # Clean phone number (leave only digits) and format as [phone_number]@s.whatsapp.net
+        clean_phone = "".join(c for c in phone_number if c.isdigit())
+        recipient_id = f"{clean_phone}@s.whatsapp.net" if not clean_phone.endswith("@s.whatsapp.net") else clean_phone
+        
         payload = {
             "account_id": account_id,
-            "attendees": [{"provider_id": phone_number}],
+            "attendees_ids": [recipient_id],
             "text": text
         }
         try:
@@ -144,6 +148,9 @@ class UnipileClient:
         Retrieve the Unipile provider_id for a LinkedIn user from their profile URL.
         This is needed to send invitations or messages.
         """
+        if not linkedin_url or not isinstance(linkedin_url, str):
+            return None
+            
         # Extract the LinkedIn vanity name from the URL
         # e.g. https://linkedin.com/in/johndoe -> johndoe
         import re
@@ -174,7 +181,7 @@ class UnipileClient:
         url = f"{self.dsn}/api/v1/chats"
         payload = {
             "account_id": account_id,
-            "attendees": [{"provider_id": provider_id}],
+            "attendees_ids": [provider_id],
             "text": text
         }
         try:

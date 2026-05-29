@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { useTranslation } from '@/lib/i18n';
 
 export default function DashboardError({
   error,
@@ -11,6 +12,8 @@ export default function DashboardError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const { t } = useTranslation();
+
   useEffect(() => {
     console.error('Dashboard error boundary caught:', error);
   }, [error]);
@@ -21,7 +24,7 @@ export default function DashboardError({
         <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-6">
           <AlertTriangle className="w-6 h-6 text-red-400" />
         </div>
-        <h2 className="text-xl font-semibold text-white mb-2">Something went wrong</h2>
+        <h2 className="text-xl font-semibold text-white mb-2">{t('Error') || 'Something went wrong'}</h2>
         <p className="text-sm text-gray-400 mb-6">
           {error.message || 'An unexpected error occurred while loading this page.'}
         </p>
@@ -29,7 +32,7 @@ export default function DashboardError({
           onClick={reset}
           className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
         >
-          <RefreshCw className="w-4 h-4" /> Try Again
+          <RefreshCw className="w-4 h-4" /> {t('Refresh')}
         </Button>
       </div>
     </div>

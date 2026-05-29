@@ -9,6 +9,67 @@ from services.auth import get_current_user
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 
+
+@router.get("/", response_model=List[schemas.Lead])
+def list_leads(
+    workflow_id: Optional[int] = Query(None),
+    pool_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Paginated lead listing with optional filters. Access controlled by workflow/pool ownership."""
+    query = db.query(models.Lead)
+
+    # Filter by workflow ownership
+    if workflow_id:
+        wf = db.query(models.Workflow).filter(models.Workflow.id == workflow_id).first()
+        if not wf:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        if not user.is_admin and wf.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Workflow not found")
+        query = query.filter(models.Lead.workflow_id == workflow_id)
+    elif pool_id:
+        pool = db.query(models.ClientPool).filter(models.ClientPool.id == pool_id).first()
+        if not pool:
+            raise HTTPException(status_code=404, detail="Pool not found")
+        if not user.is_admin and pool.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Pool not found")
+        query = query.filter(models.Lead.client_pool_id == pool_id)
+    elif not user.is_admin:
+        # Non-admin without specific filter: show only their leads via workflow or pool
+        wf_ids = [w.id for w in db.query(models.Workflow.id).filter(models.Workflow.user_id == user.id).all()]
+        pool_ids = [p.id for p in db.query(models.ClientPool.id).filter(models.ClientPool.user_id == user.id).all()]
+        from sqlalchemy import or_
+        conditions = []
+        if wf_ids:
+            conditions.append(models.Lead.workflow_id.in_([r.id for r in wf_ids]))
+        if pool_ids:
+            conditions.append(models.Lead.client_pool_id.in_([r.id for r in pool_ids]))
+        if conditions:
+            query = query.filter(or_(*conditions))
+        else:
+            return []
+
+    if status:
+        query = query.filter(models.Lead.status == status)
+    if search:
+        search_term = f"%{search}%"
+        query = query.filter(
+            or_(models.Lead.company_name.ilike(search_term),
+                models.Lead.domain.ilike(search_term),
+                models.Lead.email.ilike(search_term),
+                models.Lead.first_name.ilike(search_term),
+                models.Lead.last_name.ilike(search_term))
+        )
+
+    total = query.count()
+    leads = query.order_by(models.Lead.id.desc()).offset(skip).limit(limit).all()
+    return leads
+
 def run_preference_learning_bg(persona_id: int):
     from database import SessionLocal
     from services.preference_learner import learn_preferences_for_persona
@@ -18,11 +79,24 @@ def run_preference_learning_bg(persona_id: int):
     finally:
         db.close()
 
+def _verify_lead_ownership(lead_id: int, db: Session, user: models.User) -> models.Lead:
+    """Verify the current user owns the lead (via workflow or client pool). Returns the lead or raises 404."""
+    query = db.query(models.Lead).outerjoin(
+        models.Workflow, models.Workflow.id == models.Lead.workflow_id
+    ).outerjoin(
+        models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id
+    ).filter(models.Lead.id == lead_id)
+    if not user.is_admin:
+        query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
+    lead = query.first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return lead
+
+
 @router.put("/{lead_id}", response_model=schemas.Lead)
 def update_lead(lead_id: int, lead_update: schemas.LeadCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    db_lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
-    if not db_lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    db_lead = _verify_lead_ownership(lead_id, db, user)
 
     update_data = lead_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -34,9 +108,13 @@ def update_lead(lead_id: int, lead_update: schemas.LeadCreate, db: Session = Dep
 
 @router.delete("/{lead_id}")
 def delete_lead(lead_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    db_lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
-    if not db_lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    db_lead = _verify_lead_ownership(lead_id, db, user)
+    # Cascade-delete child records
+    db.query(models.EmailLog).filter(models.EmailLog.lead_id == lead_id).delete(synchronize_session=False)
+    db.query(models.LeadFeedback).filter(models.LeadFeedback.lead_id == lead_id).delete(synchronize_session=False)
+    from models import MessageLog, LeadBrief
+    db.query(MessageLog).filter(MessageLog.lead_id == lead_id).delete(synchronize_session=False)
+    db.query(LeadBrief).filter(LeadBrief.lead_id == lead_id).delete(synchronize_session=False)
     db.delete(db_lead)
     db.commit()
     return {"ok": True}
@@ -180,3 +258,30 @@ def get_feedback_summary(
         recent_positive_domains=recent_positive_domains[:10],
         recent_negative_domains=recent_negative_domains[:10],
     )
+
+
+@router.get("/{lead_id}/brief", response_model=schemas.LeadBriefResponse)
+def get_lead_brief(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """
+    Get the AI research brief for a specific lead.
+    """
+    query = db.query(models.Lead).outerjoin(
+        models.Workflow, models.Workflow.id == models.Lead.workflow_id
+    ).outerjoin(
+        models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id
+    ).filter(models.Lead.id == lead_id)
+    if not user.is_admin:
+        query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
+    db_lead = query.first()
+    if not db_lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+        
+    if not db_lead.brief:
+        raise HTTPException(status_code=404, detail="Brief not found for this lead")
+        
+    return db_lead.brief
+

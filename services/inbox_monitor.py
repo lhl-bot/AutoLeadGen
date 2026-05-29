@@ -57,12 +57,39 @@ def _decode_header_value(value: str) -> str:
     if not value:
         return ""
     parts = []
-    for text, encoding in decode_header(value):
-        if isinstance(text, bytes):
-            parts.append(text.decode(encoding or "utf-8", errors="replace"))
-        else:
-            parts.append(text)
-    return "".join(parts)
+    try:
+        for text, encoding in decode_header(str(value)):
+            if isinstance(text, bytes):
+                enc = encoding or "utf-8"
+                try:
+                    parts.append(text.decode(enc, errors="replace"))
+                except (LookupError, ValueError):
+                    parts.append(text.decode("utf-8", errors="replace"))
+            else:
+                parts.append(str(text))
+    except Exception:
+        return str(value)
+    
+    decoded = "".join(parts)
+    # Fallback regex for any leftover encoded words
+    if "=?" in decoded:
+        import re
+        def replace_word(match):
+            word = match.group(0)
+            try:
+                p = decode_header(word)
+                if p and isinstance(p[0][0], bytes):
+                    enc = p[0][1] or "utf-8"
+                    try:
+                        return p[0][0].decode(enc, errors="replace")
+                    except (LookupError, ValueError):
+                        return p[0][0].decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            return word
+        decoded = re.sub(r'=\?[^?]+\?[QB]\?[^?]+\?=', replace_word, decoded, flags=re.IGNORECASE)
+    return decoded
+
 
 
 _BOUNCE_SENDERS = (

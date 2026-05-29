@@ -4,9 +4,11 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, ArrowRight, AlertTriangle, ShieldCheck, Send } from 'lucide-react';
 import { cn, apiFetch } from '@/lib/utils';
+import { useTranslation } from '@/lib/i18n';
 import type { DeliverabilitySummary, EmailLog } from '@/lib/types';
 
 export default function EmailLogsPage() {
+  const { t } = useTranslation();
   const [logs, setLogs] = useState<EmailLog[]>([]);
   const [summary, setSummary] = useState<DeliverabilitySummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,47 +40,47 @@ export default function EmailLogsPage() {
     <div>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Reports</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">Outbound Logs</h1>
-          <p className="mt-2 text-sm text-gray-400">History of all messages dispatched by the system.</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Reports')}</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Outbound Logs')}</h1>
+          <p className="mt-2 text-sm text-gray-400">{t('History of all messages dispatched by the system.')}</p>
         </div>
         <Button onClick={fetchLogs} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
-          <RefreshCw className="w-4 h-4" /> Refresh
+          <RefreshCw className="w-4 h-4" /> {t('Refresh')}
         </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3 mb-6">
         <div className="glass-panel rounded-lg border border-white/10 p-4">
           <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
-            <Send className="w-4 h-4" /> Sent
+            <Send className="w-4 h-4" /> {t('Sent')}
           </div>
           <div className="text-2xl font-bold text-slate-900">{summary?.outbound_count ?? '—'}</div>
         </div>
         <div className="glass-panel rounded-lg border border-white/10 p-4">
           <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
-            <AlertTriangle className="w-4 h-4" /> Failed / Bounced
+            <AlertTriangle className="w-4 h-4" /> {t('Failed / Bounced')}
           </div>
           <div className="text-2xl font-bold text-rose-600">
-            {(summary?.status_counts.send_failed || 0) + (summary?.status_counts.bounced || 0) + (summary?.status_counts.invalid_email || 0)}
+            {(summary?.status_counts?.send_failed || 0) + (summary?.status_counts?.bounced || 0) + (summary?.status_counts?.invalid_email || 0)}
           </div>
         </div>
         <div className="glass-panel rounded-lg border border-white/10 p-4">
           <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
-            <ShieldCheck className="w-4 h-4" /> Suppressed
+            <ShieldCheck className="w-4 h-4" /> {t('Suppressed')}
           </div>
           <div className="text-2xl font-bold text-amber-700">
-            {(summary?.status_counts.needs_email || 0) + (summary?.status_counts.invalid_email || 0)}
+            {(summary?.status_counts?.needs_email || 0) + (summary?.status_counts?.invalid_email || 0)}
           </div>
         </div>
       </div>
 
       {summary?.risk_domains?.length ? (
         <div className="glass-panel rounded-lg border border-white/10 p-4 mb-6">
-          <div className="text-sm font-medium text-gray-300 mb-3">Risk Domains</div>
+          <div className="text-sm font-medium text-gray-300 mb-3">{t('Risk Domains')}</div>
           <div className="flex flex-wrap gap-2">
             {summary.risk_domains.map(item => (
               <span key={item.domain} className="rounded-full bg-rose-500/10 px-3 py-1 text-xs text-rose-200 border border-rose-500/20">
-                {item.domain}: {item.failures} failed
+                {item.domain}: {item.failures} {t('failed')}
               </span>
             ))}
           </div>
@@ -90,21 +92,21 @@ export default function EmailLogsPage() {
           <table className="w-full text-left text-sm">
             <thead className="bg-white/5 text-gray-400 text-xs uppercase tracking-wider">
               <tr>
-                <th className="px-6 py-4 font-semibold">Time</th>
-                <th className="px-6 py-4 font-semibold">Direction</th>
-                <th className="px-6 py-4 font-semibold">Route</th>
-                <th className="px-6 py-4 font-semibold">Lead</th>
-                <th className="px-6 py-4 font-semibold">Subject / Info</th>
+                <th className="px-6 py-4 font-semibold">{t('Time')}</th>
+                <th className="px-6 py-4 font-semibold">{t('Direction')}</th>
+                <th className="px-6 py-4 font-semibold">{t('Route')}</th>
+                <th className="px-6 py-4 font-semibold">{t('Lead')}</th>
+                <th className="px-6 py-4 font-semibold">{t('Subject / Info')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5 text-gray-300">
               {isLoading ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">Loading logs...</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">{t('Loading email logs...')}</td>
                 </tr>
               ) : logs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">No outbound logs yet.</td>
+                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">{t('No logs found')}</td>
                 </tr>
               ) : (
                 logs.map(log => (
@@ -117,12 +119,12 @@ export default function EmailLogsPage() {
                         "px-2 py-1 rounded text-xs font-semibold uppercase",
                         log.direction === 'outbound' ? "bg-indigo-500/10 text-indigo-500" : "bg-emerald-500/10 text-emerald-500"
                       )}>
-                        {log.direction}
+                        {t(log.direction)}
                       </span>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-gray-400">
-                        <span>{log.from_email || 'System'}</span>
+                        <span>{log.from_email || t('System')}</span>
                         <ArrowRight className="w-3 h-3 text-gray-600" />
                         <span className="text-gray-300">{log.to_email || '—'}</span>
                       </div>

@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/input';
 import { Bot, User, Send, Loader2, Sparkles, Trash2 } from 'lucide-react';
 import { apiFetch } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslation } from '@/lib/i18n';
+import ConfirmDialog from '@/components/ConfirmDialog';
 
 type Message = {
   id: string;
@@ -130,10 +132,14 @@ function MarkdownMessage({ content }: { content: string }) {
 }
 
 export default function AgentPage() {
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Clear chat ConfirmDialog state
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -182,7 +188,7 @@ export default function AgentPage() {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'agent',
-        content: "⚠️ I encountered a network error while trying to reach my servers. Please try again."
+        content: t('I encountered a network error while trying to reach my servers. Please try again.')
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -191,24 +197,23 @@ export default function AgentPage() {
   };
 
   const clearChat = () => {
-    if(confirm("Are you sure you want to clear the chat history?")) {
-      setMessages([]);
-    }
+    setMessages([]);
+    setClearDialogOpen(false);
   };
 
   return (
     <div className="mx-auto flex h-[calc(100vh-7rem)] max-w-5xl flex-col">
       <div className="mb-5 flex shrink-0 flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Assistant</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Assistant')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl flex items-center gap-2">
-            <Bot className="w-7 h-7 text-indigo-500" /> AutoLeadGen Copilot
+            <Bot className="w-7 h-7 text-indigo-500" /> {t('AI Copilot')}
           </h1>
-          <p className="mt-2 text-sm text-gray-400">Live-search companies, enrich contacts, draft outreach, and inspect your pipeline.</p>
+          <p className="mt-2 text-sm text-gray-400">{t('Live-search companies, enrich contacts, draft outreach, and inspect your pipeline.')}</p>
         </div>
         {messages.length > 0 && (
-          <Button onClick={clearChat} variant="outline" size="sm" className="gap-2 bg-transparent text-gray-400 border-white/10 hover:text-red-400 hover:border-red-400/50">
-            <Trash2 className="w-4 h-4" /> Clear Chat
+          <Button onClick={() => setClearDialogOpen(true)} variant="outline" size="sm" className="gap-2 bg-transparent text-gray-400 border-white/10 hover:text-red-400 hover:border-red-400/50">
+            <Trash2 className="w-4 h-4" /> {t('Clear Chat')}
           </Button>
         )}
       </div>
@@ -222,15 +227,15 @@ export default function AgentPage() {
                 <Sparkles className="w-7 h-7 text-indigo-500" />
               </div>
               <div>
-                <h3 className="text-lg font-medium text-gray-200 mb-1">How can I help you grow today?</h3>
-                <p className="text-sm max-w-sm mx-auto">Ask me to draft a highly personalized cold email, suggest target titles, or optimize your workflow configuration.</p>
+                <h3 className="text-lg font-medium text-gray-200 mb-1">{t('How can I help you grow today?')}</h3>
+                <p className="text-sm max-w-sm mx-auto">{t('Ask me to draft a highly personalized cold email, suggest target titles, or optimize your workflow configuration.')}</p>
               </div>
               <div className="grid grid-cols-1 gap-3 mt-6 w-full max-w-xl sm:grid-cols-2">
-                <button onClick={() => setInput("帮我找10个欧洲padel销售公司，使用真实搜索")} className="p-4 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-left text-sm transition-colors">
-                  &quot;帮我找10个欧洲padel销售公司，使用真实搜索&quot;
+                <button onClick={() => setInput(t('帮我找10个欧洲padel销售公司，使用真实搜索'))} className="p-4 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-left text-sm transition-colors">
+                  &quot;{t('帮我找10个欧洲padel销售公司，使用真实搜索')}&quot;
                 </button>
-                <button onClick={() => setInput("找 castonsports.com 的采购或负责人邮箱")} className="p-4 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-left text-sm transition-colors">
-                  &quot;找 castonsports.com 的采购或负责人邮箱&quot;
+                <button onClick={() => setInput(t('找 castonsports.com 的采购或负责人邮箱'))} className="p-4 rounded-lg bg-white/5 border border-white/5 hover:bg-white/10 text-left text-sm transition-colors">
+                  &quot;{t('找 castonsports.com 的采购或负责人邮箱')}&quot;
                 </button>
               </div>
             </div>
@@ -255,10 +260,10 @@ export default function AgentPage() {
                         </div>
                       )}
                     </div>
-                    <div 
+                    <div
                       className={`px-5 py-3.5 rounded-lg text-[15px] leading-relaxed shadow-sm ${
-                        msg.role === 'user' 
-                          ? 'bg-indigo-600 text-white rounded-tr-sm' 
+                        msg.role === 'user'
+                          ? 'bg-indigo-600 text-white rounded-tr-sm'
                           : 'bg-[#1a1a1e] border border-white/5 text-gray-200 rounded-tl-sm'
                       }`}
                     >
@@ -298,12 +303,12 @@ export default function AgentPage() {
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask Copilot anything..."
+              placeholder={t('Ask Copilot anything...')}
               disabled={isLoading}
               className="w-full pl-5 pr-14 py-6 bg-[#1a1a1e] border-white/10 text-gray-100 placeholder:text-gray-500 rounded-lg focus-visible:ring-indigo-500/50 text-[15px]"
             />
-            <Button 
-              type="submit" 
+            <Button
+              type="submit"
               size="icon"
               disabled={!input.trim() || isLoading}
               className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg disabled:opacity-50"
@@ -312,10 +317,19 @@ export default function AgentPage() {
             </Button>
           </form>
           <div className="text-center mt-3">
-            <span className="text-[11px] text-gray-500">AI Copilot can make mistakes. Always review emails before sending.</span>
+            <span className="text-[11px] text-gray-500">{t('AI Copilot can make mistakes. Please verify important information.')}</span>
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={clearDialogOpen}
+        title={t('Clear Chat')}
+        message={t('Clear chat history?')}
+        variant="default"
+        onConfirm={clearChat}
+        onCancel={() => setClearDialogOpen(false)}
+      />
     </div>
   );
 }

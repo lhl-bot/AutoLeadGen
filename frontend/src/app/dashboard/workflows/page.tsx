@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch } from 'lucide-react';
+import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User } from 'lucide-react';
 import { apiFetch } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -17,6 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { useTranslation } from '@/lib/i18n';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import type { ClientPool, CustomerPersona, EmailAccount, Workflow, PlaybookPreset } from '@/lib/types';
 
 interface WorkflowForm {
@@ -132,6 +134,7 @@ const searchSourceOptions = [
 ]
 
 export default function WorkflowsPage() {
+  const { t } = useTranslation();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -157,6 +160,11 @@ export default function WorkflowsPage() {
   // Playbook state
   const [playbookPresets, setPlaybookPresets] = useState<PlaybookPreset[]>([]);
   const [showPlaybookSelector, setShowPlaybookSelector] = useState(false);
+  const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
+
+  // Delete confirmation state
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   const fetchWorkflows = async () => {
     setIsLoading(true);
@@ -267,7 +275,7 @@ export default function WorkflowsPage() {
       const payload = buildWorkflowPayload();
       const url = editingWorkflowId ? `/api/workflows/${editingWorkflowId}` : '/api/workflows/';
       const method = editingWorkflowId ? 'PUT' : 'POST';
-      
+
       const res = await apiFetch(url, {
         method,
         body: JSON.stringify(payload)
@@ -291,33 +299,41 @@ export default function WorkflowsPage() {
       const res = await apiFetch(`/api/workflows/${id}/toggle`, { method: 'POST' });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        const detail = errorData.detail || `请求失败 (${res.status})`;
-        toast.error(`操作失败: ${detail}`);
+        const detail = errorData.detail || `Request failed (${res.status})`;
+        toast.error(`${t('Operation failed')}: ${detail}`);
         return;
       }
       await fetchWorkflows();
     } catch(e) {
       console.error(e);
-      toast.error('网络错误，无法切换工作流状态。请检查网络连接后重试。');
+      toast.error(t('Network error'));
     } finally {
       setTogglingWorkflowId(null);
     }
   };
 
   const deleteWorkflow = async (id: number) => {
-    if(!confirm('确定要删除这个工作流及其所有线索吗？')) return;
+    setDeleteTargetId(id);
+    setDeleteDialog(true);
+  };
+
+  const confirmDelete = async () => {
+    if (deleteTargetId === null) return;
+    const id = deleteTargetId;
+    setDeleteDialog(false);
+    setDeleteTargetId(null);
     try {
       const res = await apiFetch(`/api/workflows/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        const detail = errorData.detail || `删除失败 (${res.status})`;
-        toast.error(`操作失败: ${detail}`);
+        const detail = errorData.detail || `Delete failed (${res.status})`;
+        toast.error(`${t('Operation failed')}: ${detail}`);
         return;
       }
       await fetchWorkflows();
     } catch(e) {
       console.error(e);
-      toast.error('网络错误，无法删除工作流。请检查网络连接后重试。');
+      toast.error(t('Network error'));
     }
   };
 
@@ -327,11 +343,11 @@ export default function WorkflowsPage() {
     try {
       const res = await apiFetch(`/api/workflows/${id}/search`, { method: 'POST' });
       const data = await res.json();
-      setSearchMessage(data.message || 'Lead search started.');
+      setSearchMessage(data.message || t('Search started'));
       window.setTimeout(fetchWorkflows, 4000);
     } catch (e) {
       console.error(e);
-      setSearchMessage('Failed to start lead search.');
+      setSearchMessage(t('Operation failed'));
     } finally {
       setSearchingWorkflowId(null);
     }
@@ -343,7 +359,7 @@ export default function WorkflowsPage() {
       const res = await apiFetch('/api/engine_logs');
       if (res.ok) {
         const data = await res.json();
-        setEngineLogs(data.logs || '暂无日志...');
+        setEngineLogs(data.logs || t('No logs yet'));
       }
     } catch {
       setEngineLogs('Error loading logs.');
@@ -374,6 +390,37 @@ export default function WorkflowsPage() {
     }
   };
 
+  const handleSuggestKeywords = async () => {
+    setIsGeneratingKeywords(true);
+    try {
+      const res = await apiFetch('/api/workflows/generate-keywords', {
+        method: 'POST',
+        body: JSON.stringify({
+          persona_id: formData.persona_id === 'none' ? null : parseInt(formData.persona_id),
+          description: (formData.name || '') + ' ' + (formData.ai_prompt || '') + ' ' + (formData.target_customer_type || '') + ' ' + (formData.product_focus || '')
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.keywords && data.keywords.length > 0) {
+          const generated = data.keywords.join(', ');
+          setFormData(prev => ({ ...prev, search_keywords: generated }));
+          toast.success('Successfully generated search keywords!');
+        } else {
+          toast.error('AI failed to generate keywords. Please enter manually.');
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.detail || 'Failed to call AI keyword generator.');
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error(t('Network error'));
+    } finally {
+      setIsGeneratingKeywords(false);
+    }
+  };
+
   const toggleEmail = (id: number) => {
     setFormData(prev => {
       const ids = prev.email_account_ids;
@@ -398,8 +445,8 @@ export default function WorkflowsPage() {
     <div>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">Automation</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">Workflows</h1>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Automation')}</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Workflows')}</h1>
           <p className="mt-2 text-sm text-gray-400">Set up automated pipelines for prospecting and outreach.</p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -409,43 +456,43 @@ export default function WorkflowsPage() {
           }}>
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2 bg-black/40 text-gray-300 border-white/20 hover:bg-black/60 hover:text-white">
-                <ScrollText className="w-4 h-4" /> Engine Logs
+                <ScrollText className="w-4 h-4" /> {t('Engine Logs')}
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-4xl bg-[#0d0d0f] border border-white/10 text-white">
               <DialogHeader>
                 <DialogTitle className="flex justify-between pr-6">
-                  <span>Engine Logs (Real-time)</span>
+                  <span>{t('Real-time Engine Logs')}</span>
                   <Button onClick={loadEngineLogs} variant="outline" size="sm" className="h-8 gap-2 bg-transparent border-white/20">
-                    <RefreshCw className="w-3 h-3" /> Refresh
+                    <RefreshCw className="w-3 h-3" /> {t('Refresh')}
                   </Button>
                 </DialogTitle>
               </DialogHeader>
               <div className="mt-4 p-4 rounded-lg bg-black font-mono text-sm text-gray-400 h-[60vh] overflow-y-auto whitespace-pre-wrap">
-                {isLogsLoading ? 'Loading...' : engineLogs}
+                {isLogsLoading ? t('Loading...') : engineLogs}
               </div>
             </DialogContent>
           </Dialog>
 
           <Button onClick={fetchWorkflows} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
-            <RefreshCw className="w-4 h-4" /> Refresh
+            <RefreshCw className="w-4 h-4" /> {t('Refresh')}
           </Button>
 
           <Dialog open={isWorkflowDialogOpen} onOpenChange={handleWorkflowDialogOpenChange}>
             <DialogTrigger asChild>
               <Button onClick={openCreateDialog} className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white border-0">
-                <Plus className="w-4 h-4" /> New Workflow
+                <Plus className="w-4 h-4" /> {t('New Workflow')}
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>{editingWorkflowId ? 'Edit Workflow' : showPlaybookSelector ? 'Choose a Playbook' : 'Create Workflow'}</DialogTitle>
+                <DialogTitle>{editingWorkflowId ? t('Edit Workflow') : showPlaybookSelector ? t('Playbook') : t('New Workflow')}</DialogTitle>
               </DialogHeader>
-              
+
               {/* ── Playbook Selector Step ── */}
               {showPlaybookSelector && !editingWorkflowId ? (
                 <div className="mt-4">
-                  <p className="text-sm text-muted-foreground mb-4">选择一个预设场景模板，AI 将自动填入最佳实践参数。</p>
+                  <p className="text-sm text-muted-foreground mb-4">{t('Select a playbook to auto-fill the workflow settings.')}</p>
                   <div className="grid grid-cols-2 gap-3">
                     {playbookPresets.map(preset => (
                       <button
@@ -462,7 +509,7 @@ export default function WorkflowsPage() {
                     onClick={() => setShowPlaybookSelector(false)}
                     className="mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    跳过，直接从空白创建 →
+                    {t('Skip, start from blank')}
                   </button>
                 </div>
               ) : (
@@ -470,14 +517,14 @@ export default function WorkflowsPage() {
               <form onSubmit={handleSaveWorkflow} className="space-y-6 mt-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Workflow Name *</Label>
-                    <Input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="e.g. NA Sports Equipment" />
+                    <Label>{t('Workflow Name')} *</Label>
+                    <Input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder={t('Enter a name for this workflow')} />
                   </div>
                   <div className="space-y-2">
-                    <Label>Bind Persona (Auto-fill)</Label>
+                    <Label>{t('Customer Persona')} (Auto-fill)</Label>
                     <Select value={formData.persona_id} onValueChange={handlePersonaSelect}>
                       <SelectTrigger>
-                        <SelectValue placeholder="-- Unbound --" />
+                        <SelectValue placeholder={t('Select a persona...')} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">-- Unbound --</SelectItem>
@@ -489,11 +536,21 @@ export default function WorkflowsPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Company Search Keywords *</Label>
+                    <div className="flex items-center justify-between">
+                      <Label>{t('Search Keywords')} *</Label>
+                      <button
+                        type="button"
+                        onClick={handleSuggestKeywords}
+                        disabled={isGeneratingKeywords}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50 transition-colors flex items-center gap-1"
+                      >
+                        {isGeneratingKeywords ? t('Generating...') : t('Generate Keywords (AI)')}
+                      </button>
+                    </div>
                     <Input required value={formData.search_keywords} onChange={e => setFormData({...formData, search_keywords: e.target.value})} placeholder="e.g. Padel equipment Europe" />
                   </div>
                   <div className="space-y-2">
-                    <Label>Target Job Titles *</Label>
+                    <Label>{t('Target Positions')} *</Label>
                     <Input required value={formData.target_positions} onChange={e => setFormData({...formData, target_positions: e.target.value})} />
                   </div>
                 </div>
@@ -501,7 +558,7 @@ export default function WorkflowsPage() {
                 <div className="space-y-3 rounded-lg border border-border p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <Label>Discovery Sources</Label>
+                      <Label>{t('Search Sources')}</Label>
                       <p className="mt-1 text-xs text-muted-foreground">Use multiple buyer pools instead of relying on one keyword search.</p>
                     </div>
                     <Badge variant="outline">{selectedSearchSources.length} selected</Badge>
@@ -526,18 +583,18 @@ export default function WorkflowsPage() {
                   </div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <Label>Competitors / Brands</Label>
+                      <Label>{t('Competitor Names')}</Label>
                       <Input value={formData.competitor_names} onChange={e => setFormData({...formData, competitor_names: e.target.value})} placeholder="Bullpadel, Nox, Head" />
                     </div>
                     <div className="space-y-2">
-                      <Label>Trade Shows</Label>
+                      <Label>{t('Trade Show Names')}</Label>
                       <Input value={formData.trade_show_names} onChange={e => setFormData({...formData, trade_show_names: e.target.value})} placeholder="ISPO, MAGIC, Outdoor Retailer" />
                     </div>
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>AI Email Prompt</Label>
+                  <Label>{t('AI Prompt')}</Label>
                   <Textarea value={formData.ai_prompt} onChange={e => setFormData({...formData, ai_prompt: e.target.value})} placeholder="Instructions for AI drafting..." />
                 </div>
 
@@ -545,41 +602,41 @@ export default function WorkflowsPage() {
                   <h4 className="text-sm font-medium text-foreground/80 mb-4">Pilot & Qualification</h4>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
-                      <Label>Buyer Type</Label>
+                      <Label>{t('Target Customer Type')}</Label>
                       <Input value={formData.target_customer_type} onChange={e => setFormData({...formData, target_customer_type: e.target.value})} placeholder="distributor, agent, brand" />
                     </div>
                     <div className="space-y-2">
-                      <Label>Target Region</Label>
+                      <Label>{t('Target Region')}</Label>
                       <Input value={formData.target_region} onChange={e => setFormData({...formData, target_region: e.target.value})} placeholder="Europe, Germany, ASEAN" />
                     </div>
                     <div className="space-y-2">
-                      <Label>Product Focus</Label>
+                      <Label>{t('Product Focus')}</Label>
                       <Input value={formData.product_focus} onChange={e => setFormData({...formData, product_focus: e.target.value})} placeholder="skiwear, functional apparel" />
                     </div>
                   </div>
                   <div className="grid grid-cols-1 gap-4 mt-4 sm:grid-cols-2">
                     <div className="space-y-2">
-                      <Label>Pilot Goal</Label>
+                      <Label>{t('Pilot Goal')}</Label>
                       <Textarea value={formData.pilot_goal} onChange={e => setFormData({...formData, pilot_goal: e.target.value})} className="min-h-[90px]" placeholder="1-3 month validation goal and success criteria..." />
                     </div>
                     <div className="space-y-2">
-                      <Label>Manual Handoff Triggers</Label>
+                      <Label>{t('Manual Handoff Triggers')}</Label>
                       <Textarea value={formData.manual_handoff_triggers} onChange={e => setFormData({...formData, manual_handoff_triggers: e.target.value})} className="min-h-[90px]" placeholder="quote, sample, MOQ, purchase plan, meeting..." />
                     </div>
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Email Signature</Label>
+                  <Label>{t('Email Signature')}</Label>
                   <Textarea value={formData.email_signature} onChange={e => setFormData({...formData, email_signature: e.target.value})} placeholder="Best regards,..." />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Bind Client Pool</Label>
+                    <Label>{t('Client Pool')}</Label>
                     <Select value={formData.client_pool_id} onValueChange={v => setFormData({...formData, client_pool_id: v || 'none'})}>
                       <SelectTrigger>
-                        <SelectValue placeholder="-- Unbound --" />
+                        <SelectValue placeholder={t('Select a client pool...')} />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">-- Unbound --</SelectItem>
@@ -588,7 +645,7 @@ export default function WorkflowsPage() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Sender Emails (Rotate)</Label>
+                    <Label>{t('Email Accounts')}</Label>
                     <div className="h-10 px-3 py-2 rounded-md border border-input bg-background flex gap-2 overflow-x-auto items-center">
                       {emails.map(em => (
                         <label key={em.id} className="flex items-center gap-1.5 text-sm whitespace-nowrap cursor-pointer">
@@ -596,7 +653,7 @@ export default function WorkflowsPage() {
                           {em.email}
                         </label>
                       ))}
-                      {emails.length === 0 && <span className="text-muted-foreground text-xs">No emails configured.</span>}
+                      {emails.length === 0 && <span className="text-muted-foreground text-xs">{t('No email accounts added yet.')}</span>}
                     </div>
                   </div>
                 </div>
@@ -605,25 +662,25 @@ export default function WorkflowsPage() {
                   <h4 className="text-sm font-medium text-foreground/80 mb-4">Advanced Settings</h4>
                   <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                     <div className="space-y-2">
-                      <Label>Daily Send Limit</Label>
+                      <Label>{t('Daily Limit')}</Label>
                       <Input type="number" required value={formData.daily_limit} onChange={e => setFormData({...formData, daily_limit: parseInt(e.target.value)})} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Min Interval (s)</Label>
+                      <Label>{t('Send Interval Min (s)')}</Label>
                       <Input type="number" required value={formData.send_interval_min} onChange={e => setFormData({...formData, send_interval_min: parseInt(e.target.value)})} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Max Interval (s)</Label>
+                      <Label>{t('Send Interval Max (s)')}</Label>
                       <Input type="number" required value={formData.send_interval_max} onChange={e => setFormData({...formData, send_interval_max: parseInt(e.target.value)})} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Max Followups</Label>
+                      <Label>{t('Max Follow-ups')}</Label>
                       <Input type="number" required value={formData.max_followups} onChange={e => setFormData({...formData, max_followups: parseInt(e.target.value) || 3})} />
                     </div>
                   </div>
                   <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
-                    Enable Auto Follow-up (AI drafts sent automatically)
+                    {t('Auto Follow-up')} (AI drafts sent automatically)
                   </label>
                 </div>
 
@@ -634,13 +691,13 @@ export default function WorkflowsPage() {
                     <div className="flex items-start gap-4">
                       <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[200px] pt-1">
                         <input type="checkbox" checked={formData.enable_linkedin} onChange={e => setFormData({...formData, enable_linkedin: e.target.checked})} className="accent-blue-500 w-4 h-4" />
-                        <span className="font-bold text-blue-600 text-xs">in</span> Enable LinkedIn Auto-Invite
+                        <span className="font-bold text-blue-600 text-xs">in</span> {t('Enable LinkedIn')}
                       </label>
                       {formData.enable_linkedin && (
                         <div className="flex-1 space-y-2">
                           <Textarea value={formData.linkedin_invite_message} onChange={e => setFormData({...formData, linkedin_invite_message: e.target.value})} className="text-sm" placeholder="AI prompt for LinkedIn invite (optional, uses email prompt if empty)" rows={2} />
                           <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">Daily Limit:</Label>
+                            <Label className="text-xs text-muted-foreground">{t('LinkedIn Daily Limit')}:</Label>
                             <Input type="number" value={formData.linkedin_daily_limit} onChange={e => setFormData({...formData, linkedin_daily_limit: parseInt(e.target.value) || 20})} className="w-20 h-7 text-sm" />
                           </div>
                         </div>
@@ -649,7 +706,7 @@ export default function WorkflowsPage() {
                     <div className="flex items-start gap-4">
                       <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[200px] pt-1">
                         <input type="checkbox" checked={formData.enable_whatsapp} onChange={e => setFormData({...formData, enable_whatsapp: e.target.checked})} className="accent-green-500 w-4 h-4" />
-                        <MessageSquare className="w-4 h-4 text-emerald-600" /> Enable WhatsApp Auto-Send
+                        <MessageSquare className="w-4 h-4 text-emerald-600" /> {t('Enable WhatsApp')}
                       </label>
                       {formData.enable_whatsapp && (
                         <div className="flex-1">
@@ -662,7 +719,7 @@ export default function WorkflowsPage() {
 
                 <div className="pt-4 flex justify-end">
                   <Button type="submit" disabled={isSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-                    {isSaving ? 'Saving...' : editingWorkflowId ? 'Update Workflow' : 'Save Workflow'}
+                    {isSaving ? 'Saving...' : editingWorkflowId ? t('Edit Workflow') : t('Save')}
                   </Button>
                 </div>
               </form>
@@ -678,11 +735,11 @@ export default function WorkflowsPage() {
       )}
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">Loading workflows...</div>
+        <div className="py-20 text-center text-gray-500">{t('Loading workflows...')}</div>
       ) : workflows.length === 0 ? (
         <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
           <Briefcase className="w-12 h-12 mx-auto mb-4 opacity-50" />
-          <p>No workflows created yet. Click &quot;New Workflow&quot; to automate your outreach.</p>
+          <p>{t('No workflows created yet.')} {t('Create your first workflow to start finding leads.')}</p>
         </div>
       ) : (
         <div className="grid gap-4">
@@ -695,22 +752,30 @@ export default function WorkflowsPage() {
                   <div className="flex items-center gap-3 mb-2">
                     <h3 className="font-bold text-lg text-white">{wf.name}</h3>
                     <Badge variant="outline" className={isActive ? 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50' : 'text-gray-400 border-gray-600'}>
-                      {isActive ? 'Running' : 'Paused'}
+                      {isActive ? t('Active') : t('Paused')}
                     </Badge>
                   </div>
                   <div className="text-sm text-gray-400 mb-3 flex items-center gap-2">
                     <Search className="h-4 w-4 text-indigo-500" />
                     {wf.search_keywords || '—'}
                   </div>
-                  
+
                   <div className="flex flex-wrap gap-2">
                     {wf.client_pool_name && (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-300">
                         <Database className="h-3.5 w-3.5" /> {wf.client_pool_name}
                       </span>
                     )}
+                    {(() => {
+                      const persona = personas.find(p => p.id === wf.persona_id);
+                      return persona ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/10 text-purple-400">
+                          <User className="h-3.5 w-3.5" /> {t('Customer Personas')}: {persona.name}
+                        </span>
+                      ) : null;
+                    })()}
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500">
-                      <Mail className="h-3.5 w-3.5" /> {wf.emails?.length || 0} Sender Accounts
+                      <Mail className="h-3.5 w-3.5" /> {wf.emails?.length || 0} {t('Email Accounts')}
                     </span>
                     {wf.enable_linkedin && (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-600">
@@ -724,7 +789,7 @@ export default function WorkflowsPage() {
                     )}
                     {wf.email_paused && (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400">
-                        Email paused · Bounce {Math.round((wf.bounce_rate || 0) * 100)}%
+                        {t('Paused')} · {t('Bounce Rate')} {Math.round((wf.bounce_rate || 0) * 100)}%
                       </span>
                     )}
                     {wf.playbook_type && (
@@ -753,7 +818,7 @@ export default function WorkflowsPage() {
                       </span>
                     )}
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-500/10 text-orange-500">
-                      <Gauge className="h-3.5 w-3.5" /> Limit {wf.daily_limit}/day | {wf.send_interval_min}-{wf.send_interval_max}s
+                      <Gauge className="h-3.5 w-3.5" /> {t('Daily Limit')} {wf.daily_limit}/day | {wf.send_interval_min}-{wf.send_interval_max}s
                     </span>
                   </div>
                 </div>
@@ -762,31 +827,31 @@ export default function WorkflowsPage() {
                   <div className="grid grid-cols-4 gap-5 text-center">
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-white">{wf.leads_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">Total</span>
+                      <span className="text-xs text-gray-500 uppercase">{t('Total')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-emerald-400">{wf.contactable_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">Contactable</span>
+                      <span className="text-xs text-gray-500 uppercase">{t('Contactable')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-amber-400">{wf.needs_email_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">Needs Email</span>
+                      <span className="text-xs text-gray-500 uppercase">{t('Needs Email')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-orange-400">{wf.low_score_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">Low Score</span>
+                      <span className="text-xs text-gray-500 uppercase">{t('Low Score')}</span>
                     </div>
                   </div>
-                  
+
                   <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                     <Button
                       onClick={() => openEditDialog(wf)}
                       variant="outline"
                       className="gap-2 w-24 bg-transparent border-white/20 text-gray-200 hover:bg-white/10"
                     >
-                      <Pencil className="w-4 h-4" /> Edit
+                      <Pencil className="w-4 h-4" /> {t('Edit')}
                     </Button>
-                    <Button 
+                    <Button
                       onClick={() => startWorkflowSearch(wf.id)}
                       disabled={searchingWorkflowId === wf.id}
                       variant="outline"
@@ -794,18 +859,18 @@ export default function WorkflowsPage() {
                     >
                       <Search className="w-4 h-4" /> {searchingWorkflowId === wf.id ? 'Finding...' : 'Find Leads'}
                     </Button>
-                    <Button 
-                      onClick={() => toggleWorkflow(wf.id)} 
+                    <Button
+                      onClick={() => toggleWorkflow(wf.id)}
                       disabled={togglingWorkflowId === wf.id}
                       variant={isActive ? "secondary" : "default"}
                       className={`gap-2 w-28 ${isActive ? 'bg-white/10 text-slate-700 hover:bg-white/20' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                     >
                       {togglingWorkflowId === wf.id ? (
-                        <><RefreshCw className="w-4 h-4 animate-spin" /> 切换中...</>
+                        <><RefreshCw className="w-4 h-4 animate-spin" /> {t('Switching...')}</>
                       ) : isActive ? (
-                        <><Pause className="w-4 h-4" /> Pause</>
+                        <><Pause className="w-4 h-4" /> {t('Stop')}</>
                       ) : (
-                        <><Play className="w-4 h-4" /> Start</>
+                        <><Play className="w-4 h-4" /> {t('Start')}</>
                       )}
                     </Button>
                     <Button onClick={() => deleteWorkflow(wf.id)} variant="ghost" size="icon" className="text-gray-500 hover:text-rose-500 hover:bg-red-400/10">
@@ -818,6 +883,14 @@ export default function WorkflowsPage() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteDialog}
+        title={t('Confirm Delete')}
+        message={t('Are you sure you want to delete this workflow and all its leads?')}
+        onConfirm={confirmDelete}
+        onCancel={() => { setDeleteDialog(false); setDeleteTargetId(null); }}
+      />
     </div>
   );
 }

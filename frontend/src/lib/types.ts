@@ -238,3 +238,18 @@ export interface User {
   is_active: boolean
   created_at?: string | null
 }
+
+export interface LeadBrief {
+  id: number
+  lead_id: number
+  company_overview?: string | null
+  recent_news?: string | null
+  pain_points?: string | null
+  value_proposition_alignment?: string | null
+  specific_products?: string | null
+  recent_activity?: string | null
+  personalization_hook?: string | null
+  created_at: string
+  updated_at: string
+}
+

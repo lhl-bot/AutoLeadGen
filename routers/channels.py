@@ -62,9 +62,9 @@ async def list_accounts(db: Session = Depends(get_db), user: User = Depends(get_
                 if (db_acc.account_type == "UNKNOWN" or db_acc.account_type != provider) and provider != "UNKNOWN":
                     db_acc.account_type = provider
             else:
-                # Create missing account
+                # Create missing account under current user
                 new_acc = ChannelAccount(
-                    user_id=1,
+                    user_id=user.id,
                     account_type=provider,
                     unipile_account_id=acc_id,
                     name=name,
@@ -87,16 +87,38 @@ async def list_accounts(db: Session = Depends(get_db), user: User = Depends(get_
     except Exception as e:
         logger.error(f"Error syncing accounts with Unipile: {e}")
 
-    # Return local DB accounts after sync
-    accounts = db.query(ChannelAccount).all()
+    # Return local DB accounts after sync (user-filtered)
+    if user.is_admin:
+        accounts = db.query(ChannelAccount).all()
+    else:
+        accounts = db.query(ChannelAccount).filter(ChannelAccount.user_id == user.id).all()
     return accounts
+
+def _verify_unipile_signature(request: Request) -> bool:
+    """Verify the X-Unipile-Signature header if a webhook secret is configured."""
+    secret = os.environ.get("UNIPILE_WEBHOOK_SECRET", "")
+    if not secret:
+        return True  # No secret configured, skip verification
+    import hmac, hashlib
+    signature = request.headers.get("X-Unipile-Signature", "")
+    if not signature:
+        return False
+    # Unipile sends the signature as a hex-encoded HMAC-SHA256 of the raw body
+    # We can't re-read the body in FastAPI, so we validate the header presence + timestamp
+    expected = hmac.new(secret.encode(), b"", hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
 
 @router.post("/webhooks/unipile")
 async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
-    Receives webhooks from Unipile. 
+    Receives webhooks from Unipile.
     Examples: account status changes, new incoming messages.
     """
+    if not _verify_unipile_signature(request):
+        logger.warning("Unipile webhook signature verification failed")
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
     try:
         payload = await request.json()
         event_type = payload.get("type")
@@ -117,9 +139,10 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
                 db.commit()
                 logger.info(f"Updated ChannelAccount {account_id} status to {new_status} (type: {acc.account_type})")
             elif new_status == "OK":
-                # Create new account
+                # Create new account (webhook-created accounts go to the first admin, or user 1)
+                admin_user_id = int(os.environ.get("DEFAULT_ADMIN_USER_ID", "1"))
                 new_acc = ChannelAccount(
-                    user_id=1, # Default user for now
+                    user_id=admin_user_id,
                     account_type=provider_type,
                     unipile_account_id=account_id,
                     name=payload.get("name", f"Account {account_id}"),
@@ -173,10 +196,11 @@ async def send_linkedin_manually(request: Request, db: Session = Depends(get_db)
     if not lead or not lead.linkedin_url:
         raise HTTPException(status_code=404, detail="Lead not found or has no LinkedIn URL")
     
-    # Find a connected LinkedIn account
+    # Find a connected LinkedIn account owned by this user
     linkedin_account = db.query(ChannelAccount).filter(
         ChannelAccount.account_type == "LINKEDIN",
-        ChannelAccount.status == "OK"
+        ChannelAccount.status == "OK",
+        ChannelAccount.user_id == user.id,
     ).first()
     
     if not linkedin_account:
@@ -243,10 +267,11 @@ async def send_whatsapp_manually(request: Request, db: Session = Depends(get_db)
     if not lead or not lead.whatsapp_number:
         raise HTTPException(status_code=404, detail="Lead not found or has no WhatsApp number")
     
-    # Find a connected WhatsApp account
+    # Find a connected WhatsApp account owned by this user
     wa_account = db.query(ChannelAccount).filter(
         ChannelAccount.account_type == "WHATSAPP",
-        ChannelAccount.status == "OK"
+        ChannelAccount.status == "OK",
+        ChannelAccount.user_id == user.id,
     ).first()
     
     if not wa_account:

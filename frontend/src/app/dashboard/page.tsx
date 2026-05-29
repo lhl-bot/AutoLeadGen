@@ -28,6 +28,11 @@ export default function DashboardOverview() {
   const [trends, setTrends] = useState<DashboardTrend[]>([]);
   const [todayReport, setTodayReport] = useState<TodayReport | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [health, setHealth] = useState<{
+    database: string; outbound_engine: string; active_workflows: number;
+    recent_emails_30m: number; unipile_accounts: number; email_accounts: number;
+    has_active_email: boolean; llm_api_configured: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -38,6 +43,11 @@ export default function DashboardOverview() {
           setStats(data.kpis);
           setTrends(data.trends);
           setTodayReport(data.today_report || null);
+        }
+        // Fetch health status in parallel
+        const hRes = await apiFetch('/api/health/status');
+        if (hRes.ok) {
+          setHealth(await hRes.json());
         }
       } catch (e) {
         console.error("Failed to load analytics", e);
@@ -129,7 +139,7 @@ export default function DashboardOverview() {
               { label: t("Active Workflows"), value: stats.active_workflows, icon: Briefcase, color: "text-indigo-500" },
               { label: t("Leads Sourced"), value: stats.total_leads, icon: Search, color: "text-emerald-500" },
               { label: t("Messages Sent"), value: stats.emails_sent, icon: Mail, color: "text-orange-500" },
-              { label: t("Replies"), value: stats.total_replies, icon: MessageSquare, color: "text-purple-500" }
+              { label: t("Total Replies"), value: stats.total_replies, icon: MessageSquare, color: "text-purple-500" }
             ].map((stat, i) => (
               <motion.div 
                 key={i}
@@ -201,33 +211,39 @@ export default function DashboardOverview() {
                   <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Outbound Engine')}</div>
-                      <div className="text-xs text-gray-400">{t('Background workers')}</div>
+                      <div className="text-xs text-gray-400">{health ? `${health.active_workflows} active · ${health.recent_emails_30m} sent/30m` : t('Background workers')}</div>
                     </div>
-                    <div className="flex items-center gap-2 text-emerald-500 text-xs font-semibold bg-emerald-500/10 px-3 py-1 rounded-full">
-                      <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                      {t('Online')}
+                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
+                      health?.outbound_engine === 'active' ? 'text-emerald-500 bg-emerald-500/10' : 'text-amber-500 bg-amber-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${health?.outbound_engine === 'active' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></div>
+                      {health?.outbound_engine === 'active' ? t('Online') : health?.outbound_engine === 'idle' ? 'Idle' : t('Offline')}
                     </div>
                   </div>
-                  
+
                   <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Research Agent')}</div>
-                      <div className="text-xs text-gray-400">{t('DeepSeek LLM Models')}</div>
+                      <div className="text-xs text-gray-400">{health?.llm_api_configured ? t('DeepSeek LLM Models') : 'LLM not configured'}</div>
                     </div>
-                    <div className="flex items-center gap-2 text-emerald-500 text-xs font-semibold bg-emerald-500/10 px-3 py-1 rounded-full">
-                      <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                      {t('Online')}
+                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
+                      health?.llm_api_configured ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${health?.llm_api_configured ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
+                      {health?.llm_api_configured ? t('Online') : t('Offline')}
                     </div>
                   </div>
 
                   <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Unipile Integration')}</div>
-                      <div className="text-xs text-gray-400">{t('Omnichannel webhooks')}</div>
+                      <div className="text-xs text-gray-400">{health ? `${health.unipile_accounts} accounts` : t('Omnichannel webhooks')}</div>
                     </div>
-                    <div className="flex items-center gap-2 text-emerald-500 text-xs font-semibold bg-emerald-500/10 px-3 py-1 rounded-full">
-                      <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                      {t('Connected')}
+                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
+                      health?.unipile_accounts ? 'text-emerald-500 bg-emerald-500/10' : 'text-gray-500 bg-gray-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${health?.unipile_accounts ? 'bg-emerald-400' : 'bg-gray-400'}`}></div>
+                      {health?.unipile_accounts ? t('Connected') : 'Not Connected'}
                     </div>
                   </div>
                 </div>

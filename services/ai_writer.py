@@ -312,3 +312,54 @@ RULES:
     except Exception as e:
         logger.error(f"Error generating WhatsApp message with LLM: {e}")
         return ""
+
+
+def generate_search_keywords(persona_details: str) -> list:
+    """Generate search keywords based on customer persona details using the LLM."""
+    system_prompt = "You are an expert in B2B lead generation and SEO search strategies."
+    prompt = f"""Based on the following customer persona description, generate 8 highly effective B2B search keyword phrases. 
+These phrases will be used to search on Google, Maps, Apollo, or directories to find potential B2B target companies.
+
+CUSTOMER PERSONA DETAILS:
+{persona_details}
+
+RULES:
+1. Output ONLY the 8 keyword phrases, one per line. No numbering, no prefixes, no explanations.
+2. Keep each phrase short and search-friendly (2-4 words maximum). E.g., "padel club spain", "furniture wholesaler germany", "sports gear distributor".
+3. Do NOT include broad search words like "importer" alone. Pair them with a product and region if relevant, but do NOT hardcode a specific country if the persona targets multiple countries (the search engine will auto-rotate countries anyway).
+4. Focus on the core business type/niche (e.g. "outdoor furniture retailer", "design hotel supply").
+5. Output must be in English.
+"""
+
+    headers = {
+        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    
+    try:
+        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        if "base_resp" in data and data["base_resp"] and data["base_resp"].get("status_code", 0) != 0:
+            return []
+        choices = data.get("choices")
+        if choices and len(choices) > 0:
+            msg = choices[0].get("message")
+            if msg:
+                content = msg.get("content", "").strip()
+                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                # Split by newline and clean
+                lines = [line.strip().strip('"\'*-.') for line in content.split("\n")]
+                return [line for line in lines if line]
+        return []
+    except Exception as e:
+        logger.error(f"Error generating search keywords: {e}")
+        return []
+

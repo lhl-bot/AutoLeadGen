@@ -144,7 +144,10 @@ def read_pool_leads(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    pool = db.query(models.ClientPool).filter(models.ClientPool.id == pool_id, models.ClientPool.user_id == user.id).first()
+    pool_query = db.query(models.ClientPool).filter(models.ClientPool.id == pool_id)
+    if not user.is_admin:
+        pool_query = pool_query.filter(models.ClientPool.user_id == user.id)
+    pool = pool_query.first()
     if not pool:
         raise HTTPException(status_code=404, detail="Client Pool not found")
 

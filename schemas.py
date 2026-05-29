@@ -238,3 +238,21 @@ class WorkflowPilotReport(BaseModel):
     high_intent_count: int = 0
     avg_fit_score: float = 0
     top_channels: List[str] = []
+
+
+class LeadBriefResponse(BaseModel):
+    id: int
+    lead_id: int
+    company_overview: Optional[str] = None
+    recent_news: Optional[str] = None
+    pain_points: Optional[str] = None
+    value_proposition_alignment: Optional[str] = None
+    specific_products: Optional[str] = None
+    recent_activity: Optional[str] = None
+    personalization_hook: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+

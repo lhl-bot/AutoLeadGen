@@ -37,8 +37,8 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
         LEFT JOIN client_pools cp ON w.client_pool_id = cp.id
         LEFT JOIN (
             SELECT workflow_id,
-                   SUM(CASE WHEN status NOT IN ('rejected', 'invalid_email', 'bounced', 'unsubscribed', 'needs_email', 'low_score') THEN 1 ELSE 0 END) AS total,
-                   SUM(CASE WHEN email IS NOT NULL AND email <> '' AND status NOT IN ('bounced', 'rejected', 'invalid_email', 'unsubscribed', 'low_score') THEN 1 ELSE 0 END) AS contactable,
+                   COUNT(id) AS total,
+                   SUM(CASE WHEN email IS NOT NULL AND email <> '' AND status NOT IN ('bounced', 'rejected', 'invalid_email', 'unsubscribed', 'low_score', 'needs_email') THEN 1 ELSE 0 END) AS contactable,
                    SUM(CASE WHEN status = 'needs_email' THEN 1 ELSE 0 END) AS needs_email,
                    SUM(status = 'replied') AS replied,
                    SUM(status = 'bounced') AS bounced,
@@ -194,6 +194,43 @@ def update_workflow(workflow_id: int, workflow: schemas.WorkflowCreate, db: Sess
     db.refresh(db_wf)
     return db_wf
 
+
+from typing import Optional
+from pydantic import BaseModel
+class KeywordGenerateRequest(BaseModel):
+    persona_id: Optional[int] = None
+    description: Optional[str] = None
+
+
+@router.post("/generate-keywords")
+def generate_keywords(
+    req: KeywordGenerateRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    persona_text = ""
+    if req.persona_id:
+        persona = db.query(models.CustomerPersona).filter(models.CustomerPersona.id == req.persona_id).first()
+        if persona:
+            persona_text = (
+                f"Name: {persona.name}\n"
+                f"Target Industry: {persona.target_industry or ''}\n"
+                f"Keywords: {persona.target_keywords or ''}\n"
+                f"Roles: {persona.target_roles or ''}\n"
+                f"Customer Types: {persona.customer_types or ''}\n"
+                f"Product Categories: {persona.product_categories or ''}\n"
+            )
+    if req.description:
+        persona_text += f"\nAdditional Context / Product Focus:\n{req.description}"
+        
+    if not persona_text.strip():
+        raise HTTPException(status_code=400, detail="Must provide persona_id or description")
+        
+    from services.ai_writer import generate_search_keywords
+    keywords = generate_search_keywords(persona_text)
+    return {"keywords": keywords}
+
+
 @router.post("/{workflow_id}/search")
 def run_workflow_search(
     workflow_id: int,
@@ -219,6 +256,17 @@ def run_workflow_search(
         "workflow_id": workflow_id,
         "message": "Lead search started in the background."
     }
+
+
+@router.get("/{workflow_id}")
+def read_workflow(workflow_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    query = db.query(models.Workflow).options(joinedload(models.Workflow.email_accounts)).filter(models.Workflow.id == workflow_id)
+    if not user.is_admin:
+        query = query.filter(models.Workflow.user_id == user.id)
+    wf = query.first()
+    if not wf:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return wf
 
 
 @router.get("/{workflow_id}/pilot-report", response_model=schemas.WorkflowPilotReport)

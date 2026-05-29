@@ -16,10 +16,13 @@ def list_email_logs(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     direction: Optional[str] = None,
+    workflow_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    include_body: bool = Query(False),
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    """List email logs with lead info."""
+    """List email logs with lead info. Supports pagination and filtering."""
     q = (
         db.query(
             models.EmailLog.id,
@@ -32,6 +35,7 @@ def list_email_logs(
             models.EmailLog.message_id,
             models.Lead.company_name.label("lead_company"),
             (models.Lead.first_name + " " + models.Lead.last_name).label("lead_name"),
+            models.Lead.status.label("lead_status"),
         )
         .join(models.Lead, models.EmailLog.lead_id == models.Lead.id)
     )
@@ -44,6 +48,10 @@ def list_email_logs(
 
     if direction:
         q = q.filter(models.EmailLog.direction == direction)
+    if workflow_id:
+        q = q.filter(models.Lead.workflow_id == workflow_id)
+    if status:
+        q = q.filter(models.Lead.status == status)
 
     logs = q.order_by(desc(models.EmailLog.sent_at)).offset(offset).limit(limit).all()
 
@@ -54,11 +62,12 @@ def list_email_logs(
             "from_email": log.from_email,
             "to_email": log.to_email,
             "subject": log.subject,
-            "body": log.body,
+            "body": log.body if include_body else None,
             "sent_at": log.sent_at.isoformat() if log.sent_at else None,
             "message_id": log.message_id,
             "lead_company": log.lead_company,
             "lead_name": log.lead_name,
+            "lead_status": log.lead_status,
         }
         for log in logs
     ]

@@ -25,7 +25,10 @@ def read_personas(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
 
 @router.get("/{persona_id}", response_model=schemas.CustomerPersona)
 def read_persona(persona_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    db_persona = db.query(models.CustomerPersona).filter(models.CustomerPersona.id == persona_id, models.CustomerPersona.user_id == user.id).first()
+    query = db.query(models.CustomerPersona).filter(models.CustomerPersona.id == persona_id)
+    if not user.is_admin:
+        query = query.filter(models.CustomerPersona.user_id == user.id)
+    db_persona = query.first()
     if db_persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     return db_persona

@@ -5,6 +5,7 @@ import time
 import logging
 import requests
 from typing import Optional, Dict, Any, List
+from services.http_client import http as _http
 
 logger = logging.getLogger("llm_client")
 
@@ -73,7 +74,7 @@ def call_llm(
     last_error = ""
     for attempt in range(max_retries):
         try:
-            resp = requests.post(LLM_BASE_URL, headers=_llm_headers(), json=payload, timeout=timeout)
+            resp = _http.post(LLM_BASE_URL, headers=_llm_headers(), json=payload, timeout=timeout)
             if resp.status_code == 429:
                 wait = min((attempt + 1) * 2, 10)
                 logger.warning(f"LLM rate limited (429), waiting {wait}s...")

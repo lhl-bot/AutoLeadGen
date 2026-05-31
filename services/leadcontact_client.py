@@ -1,6 +1,7 @@
 import requests
 import logging
 from typing import List, Dict, Any, Optional
+from services.http_client import http as _http
 
 logger = logging.getLogger("leadcontact_client")
 logger.setLevel(logging.INFO)
@@ -28,7 +29,7 @@ class LeadContactClient:
         url = f"{self.base_url}/credits"
         try:
             logger.info(f"[LeadContact] Checking remaining credits...")
-            resp = requests.get(url, headers=self.headers, timeout=15)
+            resp = _http.get(url, headers=self.headers, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 points = data.get("data", {}).get("remainingPoints", 0)
@@ -53,7 +54,7 @@ class LeadContactClient:
         }
         try:
             logger.info(f"[LeadContact] Querying email for URL: {linkedin_url}")
-            resp = requests.post(url, headers=self.headers, json=payload, timeout=20)
+            resp = _http.post(url, headers=self.headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
                 sources = data.get("data", {}).get("sources", [])
@@ -84,7 +85,7 @@ class LeadContactClient:
         }
         try:
             logger.info(f"[LeadContact] Querying phone for URL: {linkedin_url}")
-            resp = requests.post(url, headers=self.headers, json=payload, timeout=20)
+            resp = _http.post(url, headers=self.headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
                 sources = data.get("data", {}).get("sources", [])
@@ -140,7 +141,7 @@ class LeadContactClient:
         
         try:
             logger.info(f"[LeadContact] Searching employees: payload={payload}")
-            resp = requests.post(url, headers=self.headers, json=payload, timeout=30)
+            resp = _http.post(url, headers=self.headers, json=payload, timeout=30)
             if resp.status_code == 200:
                 data = resp.json()
                 # Return the data object which contains 'employees', 'totalEmployeeCount', etc.

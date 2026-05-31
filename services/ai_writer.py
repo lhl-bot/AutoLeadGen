@@ -3,6 +3,7 @@ import requests
 import re
 import logging
 from typing import Optional
+from services.http_client import http as _http
 from sqlalchemy.orm import Session
 import models
 
@@ -175,7 +176,7 @@ MANDATORY RULES:
     }
     
     try:
-        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=120)
+        response = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=120)
         response.raise_for_status()
         data = response.json()
         if "base_resp" in data and data["base_resp"] and data["base_resp"].get("status_code", 0) != 0:
@@ -235,7 +236,7 @@ RULES:
     }
     
     try:
-        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
+        response = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
         if "base_resp" in data and data["base_resp"] and data["base_resp"].get("status_code", 0) != 0:
@@ -296,7 +297,7 @@ RULES:
     }
     
     try:
-        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
+        response = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
         if "base_resp" in data and data["base_resp"] and data["base_resp"].get("status_code", 0) != 0:
@@ -344,7 +345,7 @@ RULES:
     }
     
     try:
-        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
+        response = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
         if "base_resp" in data and data["base_resp"] and data["base_resp"].get("status_code", 0) != 0:

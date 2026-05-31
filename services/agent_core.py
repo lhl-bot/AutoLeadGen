@@ -4,6 +4,7 @@ import requests
 import os
 import logging
 from typing import List, Dict, Any
+from services.http_client import http as _http
 from .snovio_client import SnovioClient
 from .search_engine import search_company_results, search_domains
 
@@ -40,7 +41,7 @@ def _llm_chat(system_prompt: str, user_prompt: str) -> str:
     delay = 1.0
     for attempt in range(max_retries):
         try:
-            resp = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=120)
+            resp = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=120)
             if resp.status_code == 429:
                 if attempt < max_retries - 1:
                     time.sleep(delay)

@@ -8,7 +8,10 @@ import random
 import logging
 import os
 
+from services.http_client import http as _http
+
 logger = logging.getLogger("outbound_engine")
+
 
 _tavily_disabled_until = 0.0
 
@@ -372,7 +375,7 @@ def _search_google_direct_query(search_query: str, offset: int = 0, max_domains:
     url = f"https://www.google.com/search?q={query}&num=50&hl=en&start={offset}"
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = _http.get(url, headers=headers, timeout=15)
         logger.info(f"Google response status: {resp.status_code}")
 
         if resp.status_code == 429:
@@ -448,7 +451,7 @@ def _search_bocha_results(search_query: str, api_key: str, max_results: int = 10
 
     try:
         logger.info(f"Searching Bocha API for: '{search_query}'")
-        resp = requests.post(endpoint, headers=headers, json=payload, timeout=_int_env("BOCHA_SEARCH_TIMEOUT", 20, 5, 60))
+        resp = _http.post(endpoint, headers=headers, json=payload, timeout=_int_env("BOCHA_SEARCH_TIMEOUT", 20, 5, 60))
         if resp.status_code != 200:
             logger.warning(f"Bocha API returned {resp.status_code}: {resp.text[:300]}")
             return []
@@ -658,7 +661,7 @@ def _search_tavily_company_results(keywords: str, count: int, offset: int, api_k
         "max_results": min(max(count * 3, 10), 20),
     }
     try:
-        resp = requests.post(
+        resp = _http.post(
             "https://api.tavily.com/search",
             headers={"Content-Type": "application/json"},
             json=payload,
@@ -790,7 +793,7 @@ def _search_tavily_query(query: str, modifier: str, api_key: str) -> List[str]:
     }
     
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        resp = _http.post(url, headers=headers, json=payload, timeout=15)
         if resp.status_code != 200:
             logger.warning(f"Tavily API returned {resp.status_code}: {resp.text}")
             if resp.status_code == 432 and _bool_env("TAVILY_DISABLE_ON_USAGE_LIMIT", True):
@@ -832,7 +835,7 @@ def _search_duckduckgo(keywords: str, offset: int = 0) -> List[str]:
     url = f"https://html.duckduckgo.com/html/?q={keywords.replace(' ', '+')}"
     
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = _http.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
         domains = []
         
@@ -872,7 +875,7 @@ def _search_bing(keywords: str, offset: int = 0) -> List[str]:
     url = f"https://www.bing.com/search?q={keywords.replace(' ', '+')}&count=50&first={offset}&setlang=en&setmkt=en-US"
     
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = _http.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, "html.parser")
         domains = []
         

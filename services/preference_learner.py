@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 import re
+from services.http_client import http as _http
 from sqlalchemy.orm import Session
 
 import models
@@ -127,7 +128,7 @@ USER FEEDBACK RECEIVED:
     }
 
     try:
-        response = requests.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
+        response = _http.post(LLM_BASE_URL, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
         

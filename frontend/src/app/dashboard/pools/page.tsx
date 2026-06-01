@@ -353,11 +353,11 @@ export default function PoolsPage() {
               <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10">
                 <div>
                   <div className="text-2xl font-bold text-slate-900">{pool.total_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">Total Leads</div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Total Leads', '总线索')}</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-indigo-500">{pool.contacted_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">Contacted</div>
+                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Contacted', '已联系')}</div>
                 </div>
               </div>
             </div>
@@ -440,7 +440,16 @@ export default function PoolsPage() {
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
                     }
                   >
-                    {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+                    {txt(
+                      s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1),
+                      s === 'all' ? '全部' :
+                      s === 'found' ? '已挖掘' :
+                      s === 'drafted' ? '草稿中' :
+                      s === 'sent' ? '已发送' :
+                      s === 'replied' ? '已回复' :
+                      s === 'needs_email' ? '缺邮箱' :
+                      s === 'low_score' ? '低分' : s
+                    )}
                   </button>
                 ))}
               </div>
@@ -471,8 +480,8 @@ export default function PoolsPage() {
                     <th className="h-11 px-4 align-middle font-medium">{txt('Job Title', '职称')}</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Channels', '渠道')}</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Status', '状态')}</th>
-                    <th className="h-11 px-4 align-middle font-medium">{txt('Fit', '匹配度')}</th>
-                    <th className="h-11 px-4 align-middle font-medium text-center" title="Follow-ups sent">F/U</th>
+                    <th className="h-11 px-4 align-middle font-medium min-w-[90px]">{txt('Fit', '匹配度')}</th>
+                    <th className="h-11 px-4 align-middle font-medium text-center" title={txt('Follow-ups sent', '已发送跟进数')}>{txt('F/U', '跟进')}</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Last Reply', '最后回复')}</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Added', '添加时间')}</th>
                     <th className="h-11 px-4 align-middle font-medium text-center">{txt('Quality', '操作评分')}</th>
@@ -577,17 +586,29 @@ export default function PoolsPage() {
                           variant="secondary"
                           className={statusBadgeClass(lead.status)}
                         >
-                          {lead.status}
+                          {txt(
+                            lead.status,
+                            lead.status === 'found' ? '已挖掘' :
+                            lead.status === 'drafted' ? '已起草' :
+                            lead.status === 'sending' ? '发送中' :
+                            lead.status === 'sent' ? '已发送' :
+                            lead.status === 'replied' ? '已回复' :
+                            lead.status === 'rejected' ? '已拒绝' :
+                            lead.status === 'needs_email' ? '缺邮箱' :
+                            lead.status === 'low_score' ? '低分' :
+                            lead.status === 'failed' ? '发送失败' :
+                            lead.status === 'provider_limited' ? '渠道受限' : lead.status
+                          )}
                         </Badge>
                       </td>
-                      <td className="py-3 px-4">
+                      <td className="py-3 px-4 whitespace-nowrap">
                         <div className="flex flex-col gap-1">
                           {lead.fit_score !== null && lead.fit_score !== undefined ? (
                             <Badge variant="secondary" className={fitBadgeClass(lead.fit_grade || '')}>
                               {lead.fit_grade || '—'} · {lead.fit_score}
                             </Badge>
                           ) : (
-                            <span className="text-xs text-slate-300">{txt('Unscored', '未评分')}</span>
+                            <span className="text-xs text-slate-300 whitespace-nowrap">{txt('Unscored', '未评分')}</span>
                           )}
                           {lead.handoff_recommended && (
                             <span className="inline-flex w-fit rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">

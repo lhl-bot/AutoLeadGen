@@ -447,7 +447,7 @@ export default function WorkflowsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Automation')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Workflows')}</h1>
-          <p className="mt-2 text-sm text-gray-400">Set up automated pipelines for prospecting and outreach.</p>
+          <p className="mt-2 text-sm text-gray-400">{t('Set up automated pipelines for prospecting and outreach.')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Dialog open={isLogsOpen} onOpenChange={(open) => {
@@ -559,7 +559,7 @@ export default function WorkflowsPage() {
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label>{t('Search Sources')}</Label>
-                      <p className="mt-1 text-xs text-muted-foreground">Use multiple buyer pools instead of relying on one keyword search.</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{t('Use multiple buyer pools instead of relying on one keyword search.')}</p>
                     </div>
                     <Badge variant="outline">{selectedSearchSources.length} selected</Badge>
                   </div>
@@ -599,7 +599,7 @@ export default function WorkflowsPage() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-foreground/80 mb-4">Pilot & Qualification</h4>
+                  <h4 className="text-sm font-medium text-foreground/80 mb-4">{t('Pilot & Qualification')}</h4>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <Label>{t('Target Customer Type')}</Label>
@@ -659,7 +659,7 @@ export default function WorkflowsPage() {
                 </div>
 
                 <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-foreground/80 mb-4">Advanced Settings</h4>
+                  <h4 className="text-sm font-medium text-foreground/80 mb-4">{t('Advanced Settings')}</h4>
                   <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                     <div className="space-y-2">
                       <Label>{t('Daily Limit')}</Label>
@@ -680,13 +680,13 @@ export default function WorkflowsPage() {
                   </div>
                   <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
-                    {t('Auto Follow-up')} (AI drafts sent automatically)
+                    {t('Auto Follow-up')} ({t('AI drafts sent automatically')})
                   </label>
                 </div>
 
                 {/* Omnichannel Settings */}
                 <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-foreground/80 mb-4">Channel Settings</h4>
+                  <h4 className="text-sm font-medium text-foreground/80 mb-4">{t('Channel Settings')}</h4>
                   <div className="space-y-4">
                     <div className="flex items-start gap-4">
                       <label className="flex items-center gap-2 text-sm cursor-pointer min-w-[200px] pt-1">
@@ -695,7 +695,7 @@ export default function WorkflowsPage() {
                       </label>
                       {formData.enable_linkedin && (
                         <div className="flex-1 space-y-2">
-                          <Textarea value={formData.linkedin_invite_message} onChange={e => setFormData({...formData, linkedin_invite_message: e.target.value})} className="text-sm" placeholder="AI prompt for LinkedIn invite (optional, uses email prompt if empty)" rows={2} />
+                          <Textarea value={formData.linkedin_invite_message} onChange={e => setFormData({...formData, linkedin_invite_message: e.target.value})} className="text-sm" placeholder={t('AI prompt for LinkedIn invite (optional, uses email prompt if empty)')} rows={2} />
                           <div className="flex items-center gap-2">
                             <Label className="text-xs text-muted-foreground">{t('LinkedIn Daily Limit')}:</Label>
                             <Input type="number" value={formData.linkedin_daily_limit} onChange={e => setFormData({...formData, linkedin_daily_limit: parseInt(e.target.value) || 20})} className="w-20 h-7 text-sm" />
@@ -710,7 +710,7 @@ export default function WorkflowsPage() {
                       </label>
                       {formData.enable_whatsapp && (
                         <div className="flex-1">
-                          <Textarea value={formData.whatsapp_message_template} onChange={e => setFormData({...formData, whatsapp_message_template: e.target.value})} className="text-sm" placeholder="AI prompt for WhatsApp message (optional)" rows={2} />
+                          <Textarea value={formData.whatsapp_message_template} onChange={e => setFormData({...formData, whatsapp_message_template: e.target.value})} className="text-sm" placeholder={t('AI prompt for WhatsApp message (optional)')} rows={2} />
                         </div>
                       )}
                     </div>

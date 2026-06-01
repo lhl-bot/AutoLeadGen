@@ -18,7 +18,7 @@ class UnipileClient:
         self.last_error_status = None
         self.last_error_body = ""
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "X-API-KEY": self.api_key,
             "Content-Type": "application/json",
             "Accept": "application/json"
         }

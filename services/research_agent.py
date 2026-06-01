@@ -202,9 +202,19 @@ async def build_and_save_lead_brief(lead_id: int, domain: str) -> bool:
             personalization_hook=brief_data.get("personalization_hook", "")
         )
         db.add(new_brief)
-        db.commit()
-        logger.info(f"Successfully saved brief for {domain}.")
-        return True
+        try:
+            db.commit()
+            logger.info(f"Successfully saved brief for {domain}.")
+            return True
+        except Exception as commit_exc:
+            db.rollback()
+            # Double check if someone else inserted it in the meantime
+            existing_again = db.query(LeadBrief).filter(LeadBrief.lead_id == lead_id).first()
+            if existing_again:
+                logger.info(f"Brief for {domain} (Lead {lead_id}) was saved by another thread/task concurrently.")
+                return True
+            else:
+                raise commit_exc
     except Exception as e:
         logger.error(f"Failed to build brief for lead {lead_id}: {e}")
         return False

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -27,8 +27,7 @@ class CustomerPersona(CustomerPersonaBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Client Pool ---
 class ClientPoolBase(BaseModel):
@@ -43,8 +42,7 @@ class ClientPool(ClientPoolBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class ClientPoolWithStats(ClientPool):
     total_leads: int = 0
@@ -71,8 +69,7 @@ class EmailAccount(EmailAccountBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Workflow ---
 class WorkflowBase(BaseModel):
@@ -115,8 +112,7 @@ class Workflow(WorkflowBase):
     id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class WorkflowWithDetails(Workflow):
     emails: List[EmailAccount] = []
@@ -175,8 +171,7 @@ class Lead(LeadBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Email Log ---
 class EmailLogBase(BaseModel):
@@ -195,8 +190,7 @@ class EmailLog(EmailLogBase):
     id: int
     sent_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Lead Rating / Feedback ---
 class LeadRateRequest(BaseModel):
@@ -210,8 +204,7 @@ class LeadFeedbackResponse(BaseModel):
     reason: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class FeedbackSummary(BaseModel):
     total_positive: int = 0
@@ -254,8 +247,7 @@ class LeadBriefResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --- Credits ---
@@ -283,8 +275,7 @@ class CreditTransaction(BaseModel):
     created_by_user_id: Optional[int] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CreditGrantRequest(BaseModel):

@@ -189,6 +189,13 @@ python migrate_v7.py
 uvicorn main:app --reload --port 8001
 ```
 
+**Backend tests:**
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 **Frontend:**
 
 ```bash

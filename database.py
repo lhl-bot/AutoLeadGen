@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 
 import os
 from dotenv import load_dotenv
-load_dotenv(override=True)
+load_dotenv(override=os.environ.get("AUTOLEADGEN_ENV", "").lower() != "test")
 
 # DATABASE_URL must be set in .env
 SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -15,21 +15,34 @@ import time
 import functools
 import asyncio
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import StaticPool
+
+
+def _engine_options(database_url: str) -> dict:
+    if database_url.startswith("sqlite"):
+        options = {
+            "connect_args": {"check_same_thread": False},
+        }
+        if database_url in {"sqlite://", "sqlite:///:memory:", "sqlite+pysqlite://", "sqlite+pysqlite:///:memory:"}:
+            options["poolclass"] = StaticPool
+        return options
+
+    return {
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE_SECONDS", "1800")),
+        "pool_use_lifo": True,
+        "pool_pre_ping": True,    # Ping before using to avoid "MySQL server has gone away"
+        "connect_args": {
+            "connect_timeout": 10,
+            "read_timeout": 60,     # Allow longer queries for large tables
+            "write_timeout": 30,
+        },
+    }
+
 
 # Remove NullPool to enable connection pooling (QueuePool is default)
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=int(os.environ.get("DB_POOL_RECYCLE_SECONDS", "1800")),
-    pool_use_lifo=True,
-    pool_pre_ping=True,    # Ping before using to avoid "MySQL server has gone away"
-    connect_args={
-        'connect_timeout': 10,
-        'read_timeout': 60,     # Allow longer queries for large tables
-        'write_timeout': 30,
-    }
-)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, **_engine_options(SQLALCHEMY_DATABASE_URL))
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def db_retry(max_attempts=3, delay=2, backoff=2):

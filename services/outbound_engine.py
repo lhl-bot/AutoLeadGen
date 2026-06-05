@@ -4,11 +4,10 @@ import random
 import logging
 import threading
 import re
-import socket
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from database import SessionLocal, db_retry, db_retry_async
-from models import Workflow, Lead, EmailLog, WorkflowEmail, ProcessedDomain, EmailAccount
+from models import Workflow, Lead, EmailLog, ProcessedDomain
 from services.search_engine import is_domain_quality_candidate, search_domain_results
 from services.snovio_client import SnovioClient
 from services.ai_writer import generate_email
@@ -16,8 +15,17 @@ from services.research_agent import build_and_save_lead_brief
 from services.email_sender import send_email
 from services.auth import decrypt_smtp_pass
 from services.credits import InsufficientCreditsError, consume_credits, refund_credits
+from services.email_content import build_email_html, prepare_email_content
+from services.email_preflight import (
+    is_email_good_for_lead,
+    is_lead_sendable_now,
+    temporary_send_block_reason,
+    validate_lead_before_send,
+)
 from services.lead_scoring import apply_lead_score, build_outreach_context
-from services.suppression import generate_unsubscribe_token, owner_id_for_lead, suppression_reason
+from services.send_results import record_send_failure, record_send_success
+from services.sender_accounts import select_sender_account
+from services.suppression import generate_unsubscribe_token, suppression_reason
 
 # ─── Global Snovio Client ───
 import os
@@ -213,114 +221,6 @@ def _add_company_only_lead(
         source_channel=source_channel,
         data_sources=data_sources,
     ))
-    return True
-
-
-_EMAIL_RE = re.compile(r"^[A-Z0-9._%+\-']+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
-_MOCK_FIRST_NAMES = {"alex", "sam", "jordan", "taylor", "morgan", "casey"}
-_MOCK_LAST_NAMES = {"smith", "johnson", "williams", "brown", "jones", "garcia"}
-from cachetools import TTLCache
-
-_domain_resolution_cache: TTLCache = TTLCache(maxsize=10000, ttl=3600)
-_mx_record_cache: TTLCache = TTLCache(maxsize=10000, ttl=3600)
-
-
-def _email_domain(email: str) -> str:
-    return (email or "").split("@")[-1].lower().strip()
-
-
-def _looks_like_generated_mock_email(email: str) -> bool:
-    local = (email or "").split("@", 1)[0].lower()
-    parts = re.split(r"[._+\-]+", local)
-    if len(parts) >= 2 and parts[0] in _MOCK_FIRST_NAMES and parts[1] in _MOCK_LAST_NAMES:
-        return True
-    # Also catch underscore-joined mock patterns like "casey_brown"
-    if "_" in local:
-        underscore_parts = local.split("_")
-        if len(underscore_parts) >= 2 and underscore_parts[0] in _MOCK_FIRST_NAMES and underscore_parts[1] in _MOCK_LAST_NAMES:
-            return True
-    return False
-
-
-def _domain_resolves(domain: str) -> bool:
-    if not domain:
-        return False
-    if domain in _domain_resolution_cache:
-        return _domain_resolution_cache[domain]
-    try:
-        socket.getaddrinfo(domain, None)
-        ok = True
-    except OSError:
-        ok = False
-    _domain_resolution_cache[domain] = ok
-    return ok
-
-
-def _domain_has_mx(domain: str) -> bool:
-    """Check if domain has valid MX records (can receive email)."""
-    if not domain:
-        return False
-    if domain in _mx_record_cache:
-        return _mx_record_cache[domain]
-    try:
-        import dns.resolver
-        answers = dns.resolver.resolve(domain, 'MX')
-        ok = len(answers) > 0
-    except Exception:
-        ok = False
-    _mx_record_cache[domain] = ok
-    return ok
-
-
-def _validate_lead_before_send(lead: Lead, db=None) -> Optional[str]:
-    if lead.status in {"unsubscribed", "rejected"}:
-        return f"lead_status_{lead.status}"
-    if db is not None:
-        owner_id = owner_id_for_lead(db, lead)
-        reason = suppression_reason(db, email=lead.email, domain=lead.domain, user_id=owner_id)
-        if reason:
-            return reason
-    if not lead.email:
-        return "missing_email"
-    email = lead.email.strip().lower()
-    if not _EMAIL_RE.match(email):
-        return "invalid_email_format"
-    if _bool_env("EMAIL_SKIP_GENERATED_MOCK_EMAILS", True) and _looks_like_generated_mock_email(email):
-        return "suspected_generated_mock_email"
-    # Check pre-verified status (from email_verifier pipeline)
-    if getattr(lead, 'email_validation_status', None) == "invalid":
-        return "email_pre_verified_invalid"
-    domain = _email_domain(email)
-    if _bool_env("EMAIL_CHECK_RECIPIENT_DOMAIN_DNS", True) and not _domain_resolves(domain):
-        return "recipient_domain_does_not_resolve"
-    # MX record check: domain may resolve (has A record) but cannot receive email
-    if _bool_env("EMAIL_CHECK_RECIPIENT_MX", True) and not _domain_has_mx(domain):
-        return "recipient_domain_has_no_mx_record"
-    return None
-
-
-def _is_email_good_for_lead(email: str, domain: str) -> bool:
-    if not email or not _EMAIL_RE.match(email.strip()):
-        return False
-
-    normalized = email.strip().lower()
-    local = normalized.split("@", 1)[0]
-    blocked_locals = {
-        "test", "example", "no-reply", "noreply", "donotreply",
-        "mailer-daemon", "postmaster", "abuse", "privacy",
-    }
-    if local in blocked_locals:
-        return False
-
-    if _bool_env("EMAIL_SKIP_GENERATED_MOCK_EMAILS", True) and _looks_like_generated_mock_email(normalized):
-        return False
-
-    if _bool_env("SEARCH_REQUIRE_EMAIL_DOMAIN_MATCH", True):
-        email_domain = _email_domain(normalized)
-        candidate = (domain or "").lower().strip()
-        if candidate and email_domain != candidate and not email_domain.endswith("." + candidate):
-            return False
-
     return True
 
 
@@ -579,7 +479,7 @@ async def process_workflow(wf_id: int):
                     # Temporary reasons that shouldn't suppress a lead
                     _TEMP_REASONS = {"outside_working_hours", "domain_cooldown"}
                     for candidate in drafted_leads:
-                        is_sendable, reason = _is_lead_sendable_now(candidate, db)
+                        is_sendable, reason = is_lead_sendable_now(candidate, db)
                         if is_sendable:
                             lead_to_send_id = candidate.id
                             break
@@ -1313,14 +1213,14 @@ def _search_and_extract_leads(
                     break
                 search_url = p.get("search_emails_start")
                 email = snovio.get_prospect_email(search_url) if search_url else None
-                if email and _is_email_good_for_lead(email, domain):
+                if email and is_email_good_for_lead(email, domain):
                     prospect_emails.append((email, p))
                 elif email:
                     logger.info(f"[QUALITY] Skipping low-quality or mismatched email {email} for {domain}")
 
         if not prospect_emails and _bool_env("SNOVIO_ALLOW_VERIFIED_DOMAIN_EMAIL_FALLBACK", True):
             for email in snovio.get_verified_domain_emails(domain):
-                if _is_email_good_for_lead(email, domain):
+                if is_email_good_for_lead(email, domain):
                     prospect_emails.append((
                         email,
                         {
@@ -1701,47 +1601,6 @@ def _apollo_search_and_extract(wf_id: int, api_key: str, batch_lead_limit: Optio
         stats["error"] = str(e)
         return stats
 
-def _is_lead_sendable_now(lead: Lead, db) -> tuple:
-    from typing import Tuple, Optional
-    preflight_reason = _validate_lead_before_send(lead, db)
-    if preflight_reason:
-        return False, preflight_reason
-
-    # ── Fit-score gate: skip low-quality leads ──
-    min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
-    if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
-        score = getattr(lead, 'fit_score', None)
-        if score is not None and score < min_score:
-            return False, f"fit_score_too_low({score}<{min_score})"
-
-    # ── Email verification gate: only send to verified/catch-all addresses ──
-    if _bool_env("EMAIL_REQUIRE_VERIFIED", True):
-        v_status = getattr(lead, 'email_validation_status', None)
-        if v_status is not None and v_status not in ("valid", "catch-all"):
-            return False, f"email_not_verified({v_status})"
-
-    if lead.timezone:
-        try:
-            import pytz
-            local_tz = pytz.timezone(lead.timezone)
-            local_now = datetime.now(local_tz)
-            if local_now.hour < 9 or local_now.hour >= 17:
-                return False, "outside_working_hours"
-        except Exception:
-            pass
-
-    domain_cooldown_hours = _int_env("EMAIL_SAME_DOMAIN_COOLDOWN_HOURS", 24, 1, 168)
-    if lead.domain:
-        recent_to_same_domain = db.query(EmailLog).join(Lead).filter(
-            Lead.domain == lead.domain,
-            EmailLog.direction == "outbound",
-            EmailLog.sent_at >= datetime.now(timezone.utc) - timedelta(hours=domain_cooldown_hours)
-        ).count()
-        if recent_to_same_domain > 0:
-            return False, "domain_cooldown"
-
-    return True, None
-
 async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool = True, raise_on_credit_error: bool = False):
     credit_charged = False
     sent_successfully = False
@@ -1751,141 +1610,44 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             logger.warning(f"Email sending paused for workflow '{wf.name}': {bounce_pause_reason}")
             return
 
-        preflight_reason = _validate_lead_before_send(lead, db)
+        preflight_reason = validate_lead_before_send(lead, db)
         if preflight_reason:
             _mark_lead_suppressed(lead, preflight_reason, db)
             logger.warning(f"Suppressed email to {lead.email or lead.domain}: {preflight_reason}")
             return
 
-        # Timezone-aware sending: only send during recipient's working hours (9-17)
-        if lead.timezone:
-            try:
-                import pytz
-                local_tz = pytz.timezone(lead.timezone)
-                local_now = datetime.now(local_tz)
-                if local_now.hour < 9 or local_now.hour >= 17:
-                    logger.info(
-                        f"Skipping {lead.email}: outside working hours in {lead.timezone} "
-                        f"(local time: {local_now.strftime('%H:%M')})"
-                    )
-                    return
-            except Exception as tz_err:
-                logger.warning(f"Timezone check failed for {lead.email} ({lead.timezone}): {tz_err}")
-
-        # Same-domain cooldown: avoid sending multiple emails to the same company in a short window
-        domain_cooldown_hours = _int_env("EMAIL_SAME_DOMAIN_COOLDOWN_HOURS", 24, 1, 168)
-        if lead.domain:
-            recent_to_same_domain = db.query(EmailLog).join(Lead).filter(
-                Lead.domain == lead.domain,
-                EmailLog.direction == "outbound",
-                EmailLog.sent_at >= datetime.now(timezone.utc) - timedelta(hours=domain_cooldown_hours)
-            ).count()
-            if recent_to_same_domain > 0:
-                logger.info(f"Skipping {lead.email}: domain {lead.domain} already contacted in last {domain_cooldown_hours}h")
-                return
-
-        workflow_emails = db.query(WorkflowEmail).join(WorkflowEmail.email_account).filter(
-            WorkflowEmail.workflow_id == wf.id,
-            EmailAccount.user_id == wf.user_id,
-        ).all()
-        if not workflow_emails:
+        temporary_reason = temporary_send_block_reason(lead, db)
+        if temporary_reason:
+            logger.info(f"Skipping {lead.email}: {temporary_reason}")
             return
-            
-        accounts = [we.email_account for we in workflow_emails]
-        if not accounts:
-            return
-            
-        # Round Robin
-        last_log = db.query(EmailLog).join(Lead).filter(
-            Lead.workflow_id == wf.id,
-            EmailLog.direction == "outbound"
-        ).order_by(EmailLog.sent_at.desc()).first()
-        
-        start_index = 0
-        if last_log:
-            last_email = last_log.from_email
-            for i, acc in enumerate(accounts):
-                if acc.email == last_email:
-                    start_index = (i + 1) % len(accounts)
-                    break
 
         per_account_daily_cap = _int_env("EMAIL_MAX_DAILY_PER_ACCOUNT", 15, 1, 500)
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        account_to_use = None
-        for offset in range(len(accounts)):
-            idx = (start_index + offset) % len(accounts)
-            candidate = accounts[idx]
-            sent_by_account_today = db.query(EmailLog).filter(
-                EmailLog.direction == "outbound",
-                EmailLog.from_email == candidate.email,
-                EmailLog.sent_at >= today,
-            ).count()
-            if sent_by_account_today < per_account_daily_cap:
-                account_to_use = candidate
-                break
-            else:
-                logger.info(f"Daily cap reached for {candidate.email}: {sent_by_account_today}/{per_account_daily_cap}, trying next account")
-                
+        sender_selection = select_sender_account(
+            db,
+            wf,
+            per_account_daily_cap=per_account_daily_cap,
+        )
+        for email, sent_count in sender_selection.capped_accounts:
+            logger.info(f"Daily cap reached for {email}: {sent_count}/{sender_selection.daily_cap}, trying next account")
+        account_to_use = sender_selection.account
         if not account_to_use:
             logger.info(f"All active sender email accounts for workflow '{wf.name}' have reached their daily caps.")
             return
                     
-        # Parse subject and body from AI draft
-        import re
-        lines = lead.ai_draft.split('\n')
-        subject = ""
-        body = lead.ai_draft
-        
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            # Match "Subject: xxx" or "SUBJECT: xxx" or "主题: xxx"
-            m = re.match(r'^(?:\*{0,2})(?:subject|SUBJECT|主题)\s*[：:]\s*(.+)', line_stripped, re.IGNORECASE)
-            if m:
-                subject = m.group(1).strip().strip('*').strip()
-                raw_body = "\n".join(lines[i+1:]).strip()
-                # Remove "BODY:" line if present
-                raw_body = re.sub(r'^(?:\*{0,2})(?:body|BODY)\s*[：:]\s*\n?', '', raw_body).strip()
-                body = raw_body
-                break
-        
-        # If no subject was extracted, generate a simple one
-        if not subject:
-            subject = f"Quick question for {lead.company_name or 'you'}"
-        
-        # === Aggressive placeholder cleanup ===
         sender_name = account_to_use.display_name or "there"
-        first_n = lead.first_name or "there"
-        comp_n = lead.company_name or "your company"
-        
-        # Replace known recipient placeholders
-        body = re.sub(r'\[First Name\]|\[first name\]', first_n, body, flags=re.IGNORECASE)
-        body = re.sub(r'\[Company\]|\[Company Name\]|\[Target Company\]', comp_n, body, flags=re.IGNORECASE)
-        
-        # Replace known sender placeholders (use display_name, not hardcoded company)
-        body = re.sub(r'\[Your Name\]|\[Name\]|\[Sender Name\]', sender_name, body, flags=re.IGNORECASE)
-        body = re.sub(r'\[Our Company\]|\[Your Company\]', '', body, flags=re.IGNORECASE)
-        
-        # Nuke ALL remaining bracket placeholders (e.g. [Title], [Phone], [Email], [LinkedIn], etc.)
-        body = re.sub(r'\[.*?\]', '', body)
-        
-        # === Thorough signature cleanup ===
-        # Remove sign-off lines + optional name/company lines that follow
-        # This catches: "Best regards,\nHuilong\nPeter Patter" and similar multi-line patterns
-        sign_off_words = r'(?:Best regards|Kind regards|Warm regards|Regards|Cheers|Thanks|Thank you|Best|Sincerely|Yours truly|Looking forward)'
-        # Pattern: sign-off word, optional comma, then up to 3 trailing lines (name, title, company)
-        body = re.sub(
-            r'\n\s*' + sign_off_words + r',?\s*(?:\n.{0,60}){0,3}\s*$',
-            '', body, flags=re.IGNORECASE
+        prepared_email = prepare_email_content(
+            lead.ai_draft,
+            company_name=lead.company_name,
+            first_name=lead.first_name,
+            sender_name=sender_name,
         )
-        
-        # Remove pipe separators and orphaned whitespace lines
-        body = "\n".join([line for line in body.split("\n") if line.strip() not in ('|', '', '  |  ', '|  ')])
+        subject = prepared_email.subject
+        body = prepared_email.body
 
         # Wrap in branded HTML template
         custom_sig = wf.email_signature if hasattr(wf, 'email_signature') and wf.email_signature else None
         unsubscribe_url = _unsubscribe_url_for_lead(lead)
-        body_html = _build_email_html(body, account_to_use.display_name or account_to_use.email, custom_sig, unsubscribe_url)
+        body_html = build_email_html(body, account_to_use.display_name or account_to_use.email, custom_sig, unsubscribe_url)
 
         in_reply_to = None
         if lead.followup_count > 0:
@@ -1930,19 +1692,14 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
         
         if res.get("success"):
             sent_successfully = True
-            lead.status = "sent"
-            lead.send_fail_count = 0
-            db_log = EmailLog(
-                lead_id=lead.id,
-                direction="outbound",
+            record_send_success(
+                db,
+                lead,
                 from_email=account_to_use.email,
-                to_email=lead.email,
                 subject=subject,
                 body=body,
                 message_id=res.get("message_id")
             )
-            db.add(db_log)
-            db.commit()
             logger.info(f"✉ Sent to {lead.email} via {account_to_use.email}")
         else:
             if credit_charged:
@@ -1955,13 +1712,11 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
                     reference_id=lead.id,
                 )
                 credit_charged = False
-            lead.send_fail_count = (lead.send_fail_count or 0) + 1
-            if lead.send_fail_count >= 3:
-                lead.status = "send_failed"
-                logger.error(f"✘ Permanently failed to send to {lead.email} after {lead.send_fail_count} attempts: {res.get('message')}")
+            failure_update = record_send_failure(db, lead)
+            if failure_update.permanently_failed:
+                logger.error(f"✘ Permanently failed to send to {lead.email} after {failure_update.fail_count} attempts: {res.get('message')}")
             else:
-                logger.warning(f"Send failed to {lead.email} (attempt {lead.send_fail_count}/3): {res.get('message')}")
-            db.commit()
+                logger.warning(f"Send failed to {lead.email} (attempt {failure_update.fail_count}/3): {res.get('message')}")
     except InsufficientCreditsError as e:
         logger.warning(
             f"Insufficient credits for workflow '{wf.name}' user #{wf.user_id}: "
@@ -1988,51 +1743,6 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             except Exception as refund_err:
                 logger.error(f"Credit refund failed for lead {lead.id}: {refund_err}")
         logger.error(f"Send stage error for {lead.email}: {e}")
-
-
-def _build_email_html(body_text: str, sender_name: str, custom_signature: str = None, unsubscribe_url: Optional[str] = None) -> str:
-    """Wrap plain text body in a clean, professional HTML email template."""
-    body_paragraphs = ""
-    for para in body_text.strip().split("\n\n"):
-        cleaned = para.strip().replace("\n", "<br>")
-        if cleaned:
-            body_paragraphs += f"<p style='margin:0 0 12px 0;line-height:1.6;color:#333333;'>{cleaned}</p>\n"
-    
-    if not body_paragraphs:
-        body_paragraphs = f"<p style='margin:0 0 12px 0;line-height:1.6;color:#333333;'>{body_text.replace(chr(10), '<br>')}</p>"
-
-    # Build signature block
-    if custom_signature and custom_signature.strip():
-        sig_lines = custom_signature.strip().split("\n")
-        sig_html = "<br>".join(line.strip() for line in sig_lines if line.strip())
-        signature_block = f"<p style='margin:0;color:#555;line-height:1.5;'>{sig_html}</p>"
-    else:
-        signature_block = f"<p style='margin:0;'>Best regards,<br><strong style='color:#555;'>{sender_name}</strong></p>"
-
-    unsubscribe_copy = "If you no longer wish to receive these emails, please reply with \"unsubscribe\"."
-    if unsubscribe_url:
-        unsubscribe_copy = f'If you no longer wish to receive these emails, <a href="{unsubscribe_url}" style="color:#94a3b8;">unsubscribe here</a>.'
-
-    return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:24px 0;">
-<tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-<tr><td style="padding:32px 40px;">
-{body_paragraphs}
-</td></tr>
-<tr><td style="padding:16px 40px 24px;border-top:1px solid #eee;font-size:13px;color:#999;">
-{signature_block}
-<p style="margin:8px 0 0;font-size:11px;color:#bbb;">{unsubscribe_copy}</p>
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>"""
-
 
 async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: str, daily_limit: int, ai_prompt: str):
     """Stage 2.5: Auto-send LinkedIn connection invitations for leads that have linkedin_url."""

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   UserCog,
+  WalletCards,
   Plus,
   RefreshCw,
   Trash2,
@@ -13,7 +14,7 @@ import {
   User,
   Shield
 } from 'lucide-react';
-import { apiFetch } from '@/lib/utils';
+import { apiFetch, formatApiDetail } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -33,6 +34,7 @@ interface CreateUserForm {
   password: string;
   display_name: string;
   is_admin: boolean;
+  initial_credits: number;
 }
 
 const emptyForm: CreateUserForm = {
@@ -40,19 +42,25 @@ const emptyForm: CreateUserForm = {
   password: '',
   display_name: '',
   is_admin: false,
+  initial_credits: 100,
 };
 
 export default function UsersPage() {
   const { t } = useTranslation();
   const [users, setUsers] = useState<UserType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<UserType | null>(null);
 
   // Form State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [formData, setFormData] = useState<CreateUserForm>(emptyForm);
   const [errorMessage, setErrorMessage] = useState('');
+  const [creditDialogOpen, setCreditDialogOpen] = useState(false);
+  const [creditUser, setCreditUser] = useState<UserType | null>(null);
+  const [creditAmount, setCreditAmount] = useState(100);
+  const [creditDescription, setCreditDescription] = useState('');
+  const [isAdjustingCredits, setIsAdjustingCredits] = useState(false);
 
   // Delete Confirm Dialog State
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -80,7 +88,7 @@ export default function UsersPage() {
       const userStr = window.localStorage.getItem('auth_user');
       if (userStr) {
         try {
-          setCurrentUser(JSON.parse(userStr));
+          setCurrentUser(JSON.parse(userStr) as UserType);
         } catch (e) {
           console.error(e);
         }
@@ -166,6 +174,51 @@ export default function UsersPage() {
     }
   };
 
+  const handleCreditClick = (user: UserType) => {
+    setCreditUser(user);
+    setCreditAmount(100);
+    setCreditDescription('');
+    setCreditDialogOpen(true);
+  };
+
+  const handleCreditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!creditUser) return;
+    if (!creditAmount) {
+      toast.error(t('Amount cannot be zero'));
+      return;
+    }
+
+    setIsAdjustingCredits(true);
+    try {
+      const res = await apiFetch(`/api/credits/users/${creditUser.id}/grant`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: creditAmount,
+          description: creditDescription || undefined,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(prev => prev.map(user => (
+          user.id === creditUser.id
+            ? { ...user, credit_balance: data.summary.balance }
+            : user
+        )));
+        toast.success(t('Credits updated'));
+        setCreditDialogOpen(false);
+      } else {
+        const err = await res.json();
+        toast.error(formatApiDetail(err.detail, t('Operation failed')));
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error(t('Network error'));
+    } finally {
+      setIsAdjustingCredits(false);
+    }
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
@@ -235,6 +288,16 @@ export default function UsersPage() {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label>{t('Initial Credits')}</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={formData.initial_credits}
+                    onChange={e => setFormData({...formData, initial_credits: Number(e.target.value)})}
+                  />
+                </div>
+
                 <div className="flex gap-6 pt-2 pb-2">
                   <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
                     <input
@@ -278,13 +341,14 @@ export default function UsersPage() {
                   <th className="px-6 py-4">{t('Username')}</th>
                   <th className="px-6 py-4">{t('Display Name')}</th>
                   <th className="px-6 py-4">{t('Role')}</th>
+                  <th className="px-6 py-4">{t('Credits')}</th>
                   <th className="px-6 py-4">{t('Status')}</th>
                   <th className="px-6 py-4 text-right">{t('Actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 text-sm text-slate-300">
                 {users.map(user => {
-                  const isSelf = currentUser && currentUser.id === user.id;
+                  const isSelf = currentUser?.id === user.id;
                   return (
                     <tr key={user.id} className="hover:bg-white/5 transition-colors">
                       <td className="px-6 py-4 font-mono text-xs">{user.id}</td>
@@ -311,6 +375,12 @@ export default function UsersPage() {
                         )}
                       </td>
                       <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/20 bg-indigo-500/10 px-2 py-0.5 text-xs font-semibold text-indigo-400">
+                          <WalletCards className="h-3 w-3" />
+                          {user.credit_balance ?? 0}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
                         {user.is_active ? (
                           <span className="inline-flex items-center gap-1 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
                             <CheckCircle2 className="w-3 h-3" /> {t('Active')}
@@ -323,6 +393,15 @@ export default function UsersPage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex justify-end gap-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleCreditClick(user)}
+                            className="h-8 gap-1 text-xs bg-transparent text-indigo-400 border-indigo-500/20 hover:bg-indigo-500/10"
+                          >
+                            <WalletCards className="w-3.5 h-3.5" />
+                            {t('Credits')}
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -367,6 +446,52 @@ export default function UsersPage() {
           setDeleteUserId(null);
         }}
       />
+
+      <Dialog open={creditDialogOpen} onOpenChange={setCreditDialogOpen}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>{t('Adjust Credits')}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreditSubmit} className="mt-4 space-y-4">
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-700">
+              <div className="font-medium">{creditUser?.username}</div>
+              <div className="text-xs text-indigo-700/70">
+                {t('Current Balance')}: {creditUser?.credit_balance ?? 0}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>{t('Amount')}</Label>
+              <Input
+                type="number"
+                value={creditAmount}
+                onChange={e => setCreditAmount(Number(e.target.value))}
+                placeholder="100"
+                required
+              />
+              <p className="text-xs text-slate-500">{t('Use negative numbers to deduct credits.')}</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>{t('Description')}</Label>
+              <Input
+                value={creditDescription}
+                onChange={e => setCreditDescription(e.target.value)}
+                placeholder={t('e.g. Trial top-up or refund adjustment')}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" onClick={() => setCreditDialogOpen(false)}>
+                {t('Cancel')}
+              </Button>
+              <Button type="submit" disabled={isAdjustingCredits} className="bg-indigo-600 text-white hover:bg-indigo-700">
+                {isAdjustingCredits ? t('Saving...') : t('Save')}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -42,7 +42,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-启动后访问 `http://你的服务器IP:8001` 即可使用。
+启动后访问 `http://你的服务器IP:8888` 即可使用前端；后端 API 暴露在 `http://你的服务器IP:8001`。
 
 ---
 
@@ -97,7 +97,7 @@ server {
     server_name crm.yourcompany.com;  # 改成你的域名
 
     location / {
-        proxy_pass http://127.0.0.1:8001;
+        proxy_pass http://127.0.0.1:8888;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -122,6 +122,10 @@ certbot --nginx -d crm.yourcompany.com
 1. **防火墙**：只开放 80/443 端口（如果用 Nginx），或 8001 端口（直连模式）
 2. **修改默认密码**：首次登录后立即修改 admin 账号的密码
 3. **`.env` 文件**：绝对不要提交到 Git！（已在 `.dockerignore` 和 `.gitignore` 中排除）
+4. **退订链接**：生产环境设置 `PUBLIC_APP_URL=https://你的域名`，确保邮件中的一键退订链接可访问
+5. **Webhook 签名**：使用 Unipile 时设置 `UNIPILE_WEBHOOK_SECRET`，生产环境未配置会拒绝 webhook
+6. **人工审核默认**：`OUTBOUND_AUTO_SEND_DRAFTS` 默认关闭，试点期建议保持人工确认后发送
+7. **积分制**：上线商业化前运行 `python migrate_v7.py`，并按套餐配置 `CREDITS_DEFAULT_BALANCE` 与 `CREDITS_COST_*`
 
 ---
 

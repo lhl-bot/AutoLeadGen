@@ -4,20 +4,49 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 import models
 import schemas
 from database import get_db
 from services.auth import get_current_user, decrypt_smtp_pass
+from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.followup_engine import analyze_reply_intent, draft_followup_email
 from services.email_sender import send_email
+from services.suppression import generate_unsubscribe_token, owner_id_for_lead, suppression_reason
 
 
 class SendReplyRequest(BaseModel):
     draft: str
 
 router = APIRouter(prefix="/api/replies", tags=["replies"])
+
+
+def _insufficient_credits_http(exc: InsufficientCreditsError) -> HTTPException:
+    return HTTPException(
+        status_code=402,
+        detail={
+            "message": "Insufficient credits",
+            "action": exc.action,
+            "required": exc.required,
+            "balance": exc.balance,
+        },
+    )
+
+
+def _verify_reply_lead(lead_id: int, db: Session, user: models.User) -> models.Lead:
+    query = db.query(models.Lead).outerjoin(
+        models.Workflow, models.Workflow.id == models.Lead.workflow_id
+    ).outerjoin(
+        models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id
+    ).filter(models.Lead.id == lead_id)
+    if not user.is_admin:
+        query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
+    lead = query.first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return lead
 
 
 @router.get("/", response_model=List[schemas.Lead])
@@ -27,18 +56,87 @@ def read_replies(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    query = db.query(models.Lead).outerjoin(models.Workflow, models.Workflow.id == models.Lead.workflow_id)
+    """
+    Returns replied leads from the real database.
+    Enriches reply_snippet from actual inbound EmailLog records.
+    """
+    # ── 1) Fetch real replied leads ──────────────────────────────
+    query = db.query(models.Lead).outerjoin(
+        models.Workflow, models.Workflow.id == models.Lead.workflow_id
+    ).outerjoin(
+        models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id
+    ).filter(models.Lead.status == "replied")
     if not user.is_admin:
-        query = query.filter(models.Workflow.user_id == user.id)
+        query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
+    replied_leads = query.order_by(models.Lead.updated_at.desc()).limit(limit).all()
 
-    # Only show leads that have actually replied
-    query = query.filter(models.Lead.status == "replied")
+    # Build lookup: lead_id → latest inbound email body
+    lead_ids = [l.id for l in replied_leads]
+    inbound_map: dict = {}
+    if lead_ids:
+        inbound_logs = (
+            db.query(models.EmailLog)
+            .filter(
+                models.EmailLog.lead_id.in_(lead_ids),
+                models.EmailLog.direction == "inbound",
+            )
+            .order_by(models.EmailLog.sent_at.desc())
+            .all()
+        )
+        for log in inbound_logs:
+            if log.lead_id not in inbound_map:
+                inbound_map[log.lead_id] = log.body
 
-    return query.order_by(
-        models.Lead.last_reply_at.is_(None),
-        models.Lead.last_reply_at.desc(),
-        models.Lead.updated_at.desc(),
-    ).limit(limit).all()
+    results = []
+    for lead in replied_leads:
+        # Use the real inbound email body if richer than the stored snippet
+        snippet = lead.reply_snippet or ""
+        real_body = inbound_map.get(lead.id, "")
+        if real_body and len(real_body) > len(snippet):
+            snippet = real_body
+
+        results.append(_lead_to_dict(lead, snippet_override=snippet))
+
+    return results
+
+
+def _lead_to_dict(
+    lead,
+    snippet_override: str = "",
+    status_override: str = "",
+    reply_time_override=None,
+) -> dict:
+    """Convert a Lead ORM object into a serialisable dict for the replies endpoint."""
+    reply_at = reply_time_override or lead.last_reply_at or lead.updated_at
+    return {
+        "id": lead.id,
+        "workflow_id": lead.workflow_id,
+        "client_pool_id": lead.client_pool_id,
+        "domain": lead.domain,
+        "company_name": lead.company_name,
+        "email": lead.email,
+        "first_name": lead.first_name,
+        "last_name": lead.last_name,
+        "job_title": lead.job_title,
+        "linkedin_url": lead.linkedin_url,
+        "status": status_override or lead.status or "replied",
+        "ai_draft": lead.ai_draft,
+        "followup_count": lead.followup_count or 1,
+        "last_reply_at": reply_at,
+        "reply_snippet": snippet_override or lead.reply_snippet or "",
+        "user_rating": lead.user_rating,
+        "email_verified": lead.email_verified,
+        "email_validation_status": lead.email_validation_status,
+        "timezone": lead.timezone,
+        "fit_score": lead.fit_score,
+        "fit_grade": lead.fit_grade,
+        "qualification_notes": lead.qualification_notes,
+        "handoff_recommended": lead.handoff_recommended,
+        "source_channel": lead.source_channel or "search",
+        "data_sources": lead.data_sources or "website, snovio",
+        "created_at": lead.created_at,
+        "updated_at": lead.updated_at,
+    }
 
 
 @router.post("/{lead_id}/generate-draft")
@@ -47,66 +145,88 @@ def generate_ai_draft(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    lead = _verify_reply_lead(lead_id, db, user)
 
     if not lead.reply_snippet:
         raise HTTPException(status_code=400, detail="No reply content to analyze")
 
-    # Analyze intent
-    analysis = analyze_reply_intent(lead.reply_snippet)
-    intent = analysis.get("intent", "other")
-    summary = analysis.get("summary", "")
+    charged = False
+    try:
+        consume_credits(
+            db,
+            user.id,
+            "ai_reply_draft",
+            description=f"AI reply draft for lead #{lead.id}",
+            reference_type="lead",
+            reference_id=lead.id,
+        )
+        charged = True
 
-    if intent == "not_interested":
+        # Analyze intent
+        analysis = analyze_reply_intent(lead.reply_snippet)
+        intent = analysis.get("intent", "other")
+        summary = analysis.get("summary", "")
+
+        if intent == "not_interested":
+            return {
+                "intent": intent,
+                "summary": summary,
+                "draft": "",
+                "message": "Lead is not interested. No draft generated."
+            }
+
+        # Get conversation history from email logs
+        from models import EmailLog
+        logs = db.query(EmailLog).filter(
+            EmailLog.lead_id == lead_id
+        ).order_by(EmailLog.sent_at.asc()).all()
+
+        conversation_history = [
+            {
+                "direction": log.direction,
+                "subject": log.subject,
+                "body": log.body,
+                "sent_at": str(log.sent_at) if log.sent_at else None,
+            }
+            for log in logs[-10:]  # Last 10 messages
+        ]
+
+        followup_round = len([l for l in logs if l.direction == "outbound"]) + 1
+
+        draft = draft_followup_email(
+            lead_data={
+                "first_name": lead.first_name,
+                "company_name": lead.company_name,
+            },
+            reply_text=lead.reply_snippet,
+            intent=intent,
+            conversation_history=conversation_history,
+            followup_round=followup_round,
+        )
+
+        # Save draft to lead
+        lead.ai_draft = draft
+        db.commit()
+
         return {
             "intent": intent,
             "summary": summary,
-            "draft": "",
-            "message": "Lead is not interested. No draft generated."
+            "draft": draft,
+            "followup_round": followup_round,
         }
-
-    # Get conversation history from email logs
-    from models import EmailLog
-    logs = db.query(EmailLog).filter(
-        EmailLog.lead_id == lead_id
-    ).order_by(EmailLog.sent_at.asc()).all()
-
-    conversation_history = [
-        {
-            "direction": log.direction,
-            "subject": log.subject,
-            "body": log.body,
-            "sent_at": str(log.sent_at) if log.sent_at else None,
-        }
-        for log in logs[-10:]  # Last 10 messages
-    ]
-
-    followup_round = len([l for l in logs if l.direction == "outbound"]) + 1
-
-    draft = draft_followup_email(
-        lead_data={
-            "first_name": lead.first_name,
-            "company_name": lead.company_name,
-        },
-        reply_text=lead.reply_snippet,
-        intent=intent,
-        conversation_history=conversation_history,
-        followup_round=followup_round,
-    )
-
-    # Save draft to lead
-    lead.ai_draft = draft
-    lead.intent = intent
-    db.commit()
-
-    return {
-        "intent": intent,
-        "summary": summary,
-        "draft": draft,
-        "followup_round": followup_round,
-    }
+    except InsufficientCreditsError as exc:
+        raise _insufficient_credits_http(exc) from exc
+    except Exception:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "ai_reply_draft",
+                description=f"Refund failed AI reply draft for lead #{lead.id}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
+        raise
 
 
 @router.post("/{lead_id}/send")
@@ -116,19 +236,28 @@ async def send_ai_reply(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    lead = _verify_reply_lead(lead_id, db, user)
     if not req.draft.strip():
         raise HTTPException(status_code=400, detail="Draft is empty")
+    if not lead.email:
+        raise HTTPException(status_code=400, detail="Lead has no recipient email")
+    if lead.status in {"unsubscribed", "rejected"}:
+        raise HTTPException(status_code=400, detail=f"Lead is {lead.status}; sending is blocked")
+    owner_id = owner_id_for_lead(db, lead)
+    blocked_reason = suppression_reason(db, email=lead.email, domain=lead.domain, user_id=owner_id)
+    if blocked_reason:
+        raise HTTPException(status_code=400, detail=f"Recipient is suppressed: {blocked_reason}")
 
     # Find email account via workflow
     if not lead.workflow_id:
         raise HTTPException(status_code=400, detail="Lead has no associated workflow")
 
-    workflow_email = db.query(models.WorkflowEmail).filter(
+    workflow_email_query = db.query(models.WorkflowEmail).join(models.EmailAccount).filter(
         models.WorkflowEmail.workflow_id == lead.workflow_id
-    ).first()
+    )
+    if not user.is_admin:
+        workflow_email_query = workflow_email_query.filter(models.EmailAccount.user_id == user.id)
+    workflow_email = workflow_email_query.first()
     if not workflow_email:
         raise HTTPException(status_code=400, detail="No email account configured for this workflow")
 
@@ -170,27 +299,67 @@ async def send_ai_reply(
     body = "\n".join([line for line in body.split("\n") if line.strip() not in ('|', '', '  |  ', '|  ')])
 
     # Build HTML
-    body_html = _build_email_html(body, account.display_name or account.email)
+    unsubscribe_url = None
+    public_base = _public_base_url()
+    if public_base and lead.email:
+        unsubscribe_url = f"{public_base}/api/unsubscribe/{generate_unsubscribe_token(lead.id, lead.email)}"
+    body_html = _build_email_html(body, account.display_name or account.email, unsubscribe_url)
 
-    # Send
-    res = await asyncio.to_thread(
-        send_email,
-        smtp_host=account.smtp_host,
-        smtp_port=account.smtp_port,
-        smtp_user=account.smtp_user,
-        smtp_pass=decrypt_smtp_pass(account.smtp_pass),
-        use_ssl=account.use_ssl,
-        use_tls=account.use_tls,
-        from_email=account.email,
-        to_email=lead.email,
-        subject=subject,
-        body_html=body_html,
-        body_text=body,
-        sender_name=account.display_name or account.email.split('@')[0],
-        reply_to=account.email,
-    )
+    charged = False
+    try:
+        consume_credits(
+            db,
+            user.id,
+            "email_send",
+            description=f"Reply email send to {lead.email}",
+            reference_type="lead",
+            reference_id=lead.id,
+            metadata={"workflow_id": lead.workflow_id},
+        )
+        charged = True
+
+        # Send
+        res = await asyncio.to_thread(
+            send_email,
+            smtp_host=account.smtp_host,
+            smtp_port=account.smtp_port,
+            smtp_user=account.smtp_user,
+            smtp_pass=decrypt_smtp_pass(account.smtp_pass),
+            use_ssl=account.use_ssl,
+            use_tls=account.use_tls,
+            from_email=account.email,
+            to_email=lead.email,
+            subject=subject,
+            body_html=body_html,
+            body_text=body,
+            sender_name=account.display_name or account.email.split('@')[0],
+            reply_to=account.email,
+            list_unsubscribe_url=unsubscribe_url,
+        )
+    except InsufficientCreditsError as exc:
+        raise _insufficient_credits_http(exc) from exc
+    except Exception:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "email_send",
+                description=f"Refund failed reply email send to {lead.email}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
+        raise
 
     if not res.get("success"):
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "email_send",
+                description=f"Refund failed reply email send to {lead.email}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
         raise HTTPException(status_code=500, detail=f"Failed to send: {res.get('message', 'Unknown error')}")
 
     # Log and update lead
@@ -211,7 +380,16 @@ async def send_ai_reply(
     return {"ok": True, "message_id": res.get("message_id")}
 
 
-def _build_email_html(body_text: str, sender_name: str) -> str:
+def _public_base_url() -> str:
+    import os
+    for name in ("PUBLIC_APP_URL", "FRONTEND_BASE_URL", "APP_BASE_URL"):
+        value = os.environ.get(name, "").strip().rstrip("/")
+        if value:
+            return value
+    return ""
+
+
+def _build_email_html(body_text: str, sender_name: str, unsubscribe_url: str = "") -> str:
     body_paragraphs = ""
     for para in body_text.strip().split("\n\n"):
         cleaned = para.strip().replace("\n", "<br>")
@@ -221,6 +399,10 @@ def _build_email_html(body_text: str, sender_name: str) -> str:
         body_paragraphs = f"<p style='margin:0 0 12px 0;line-height:1.6;color:#333333;'>{body_text.replace(chr(10), '<br>')}</p>"
 
     signature_block = f"<p style='margin:0;'>Best regards,<br><strong style='color:#555;'>{sender_name}</strong></p>"
+
+    unsubscribe_copy = "If you no longer wish to receive these emails, please reply with \"unsubscribe\"."
+    if unsubscribe_url:
+        unsubscribe_copy = f'If you no longer wish to receive these emails, <a href="{unsubscribe_url}" style="color:#94a3b8;">unsubscribe here</a>.'
 
     return f"""<!DOCTYPE html>
 <html>
@@ -234,7 +416,7 @@ def _build_email_html(body_text: str, sender_name: str) -> str:
 </td></tr>
 <tr><td style="padding:16px 40px 24px;border-top:1px solid #eee;font-size:13px;color:#999;">
 {signature_block}
-<p style="margin:8px 0 0;font-size:11px;color:#bbb;">If you no longer wish to receive these emails, please reply with \"unsubscribe\".</p>
+<p style="margin:8px 0 0;font-size:11px;color:#bbb;">{unsubscribe_copy}</p>
 </td></tr>
 </table>
 </td></tr>

@@ -181,6 +181,9 @@ python migrate.py
 python migrate_v2.py
 python migrate_v3.py
 python migrate_v4.py
+python migrate_v5.py
+python migrate_v6.py
+python migrate_v7.py
 
 # Start backend
 uvicorn main:app --reload --port 8001
@@ -223,6 +226,12 @@ The `.env` file is the single source of truth for all configuration. Key setting
 | `UNIPILE_API_KEY` | Unipile API key for LinkedIn/WhatsApp | Optional |
 | `ENABLE_BACKGROUND_WORKERS` | Enable auto-outreach loops | Optional |
 | `EMAIL_MAX_DAILY_PER_ACCOUNT` | Daily email cap per SMTP account | Optional |
+| `PUBLIC_APP_URL` | Public base URL used for one-click unsubscribe links | Production |
+| `UNIPILE_WEBHOOK_SECRET` | HMAC secret used to verify Unipile webhooks | Production if Unipile is enabled |
+| `OUTBOUND_AUTO_SEND_DRAFTS` | Auto-send AI drafts in background workers. Defaults to `false` for review-first pilots | Optional |
+| `CREDITS_ENABLED` | Enable per-user credit checks and debit ledger | Optional |
+| `CREDITS_DEFAULT_BALANCE` | Trial credits for new and migrated users | Optional |
+| `CREDITS_COST_*` | Per-action credit pricing for drafts, email, LinkedIn, and WhatsApp | Optional |
 
 See `.env.example` for the full list with descriptions.
 

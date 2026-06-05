@@ -21,7 +21,8 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     pool_size=10,
     max_overflow=20,
-    pool_recycle=60,       # Recycle connections every 60s to stay under cloud MySQL wait_timeout
+    pool_recycle=int(os.environ.get("DB_POOL_RECYCLE_SECONDS", "1800")),
+    pool_use_lifo=True,
     pool_pre_ping=True,    # Ping before using to avoid "MySQL server has gone away"
     connect_args={
         'connect_timeout': 10,

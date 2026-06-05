@@ -29,33 +29,58 @@ export default function DashboardOverview() {
   const [todayReport, setTodayReport] = useState<TodayReport | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [health, setHealth] = useState<{
-    database: string; outbound_engine: string; active_workflows: number;
-    recent_emails_30m: number; unipile_accounts: number; email_accounts: number;
-    has_active_email: boolean; llm_api_configured: boolean;
+    database: string;
+    outbound_engine: string;
+    outbound_engine_thread?: string;
+    prospecting_engine_thread?: string;
+    inbox_monitor_thread?: string;
+    omnichannel_engine_thread?: string;
+    unipile_status?: string;
+    active_workflows: number;
+    recent_emails_30m: number;
+    unipile_accounts: number;
+    email_accounts: number;
+    has_active_email: boolean;
+    llm_api_configured: boolean;
   } | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchAnalytics = async () => {
       try {
         const res = await apiFetch('/api/analytics/dashboard');
-        if (res.ok) {
+        if (res.ok && !cancelled) {
           const data = await res.json();
           setStats(data.kpis);
           setTrends(data.trends);
           setTodayReport(data.today_report || null);
         }
-        // Fetch health status in parallel
-        const hRes = await apiFetch('/api/health/status');
-        if (hRes.ok) {
-          setHealth(await hRes.json());
-        }
       } catch (e) {
         console.error("Failed to load analytics", e);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
+
+    const fetchHealth = async () => {
+      try {
+        const hRes = await apiFetch('/api/health/status');
+        if (hRes.ok && !cancelled) {
+          setHealth(await hRes.json());
+        }
+      } catch (e) {
+        console.error("Failed to load health", e);
+      }
+    };
+
     fetchAnalytics();
+    const healthTimer = window.setTimeout(fetchHealth, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(healthTimer);
+    };
   }, []);
 
   return (
@@ -63,8 +88,8 @@ export default function DashboardOverview() {
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-end">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Overview')}</p>
-          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Welcome to AutoLeadGen')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Your AI-powered outbound sales engine is ready.')}</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">{t('Welcome to AutoLeadGen')}</h1>
+          <p className="mt-2 text-sm text-slate-500">{t('Your AI-powered outbound sales engine is ready.')}</p>
         </div>
       </div>
 
@@ -77,36 +102,34 @@ export default function DashboardOverview() {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mb-6 p-5 sm:p-6 rounded-xl border border-indigo-500/30 relative overflow-hidden"
-              style={{ background: 'linear-gradient(135deg, rgba(79,70,229,0.08) 0%, rgba(16,185,129,0.06) 100%)' }}
+              className="glass-panel mb-6 overflow-hidden rounded-lg border border-indigo-200/70 p-5 sm:p-6"
             >
-              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-emerald-500/5 pointer-events-none" />
               <div className="relative z-10">
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
+                <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-950">
                   <Sparkles className="w-5 h-5 text-indigo-400" />
                   {t("Today's AI Work Report")}
-                  <span className="text-xs font-normal text-gray-400 ml-2">{t("Today's Report")}</span>
+                  <span className="ml-2 text-xs font-normal text-slate-500">{t("Today's Report")}</span>
                 </h2>
                 <div className="grid sm:grid-cols-3 gap-4">
-                  <div className="flex items-center gap-4 p-4 rounded-lg bg-black/30 border border-white/5">
+                  <div className="flex items-center gap-4 rounded-lg border border-emerald-200/70 bg-emerald-50/70 p-4">
                     <div className="p-2.5 bg-emerald-500/10 rounded-lg">
                       <Search className="w-6 h-6 text-emerald-400" />
                     </div>
                     <div>
                       <div className="text-2xl font-bold text-emerald-400">{todayReport.leads_found_today}</div>
-                      <div className="text-xs text-gray-400">{t('High-value Leads Found')}</div>
+                      <div className="text-xs text-slate-500">{t('High-value Leads Found')}</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4 p-4 rounded-lg bg-black/30 border border-white/5">
+                  <div className="flex items-center gap-4 rounded-lg border border-indigo-200/70 bg-indigo-50/70 p-4">
                     <div className="p-2.5 bg-indigo-500/10 rounded-lg">
                       <Mail className="w-6 h-6 text-indigo-400" />
                     </div>
                     <div>
                       <div className="text-2xl font-bold text-indigo-400">{todayReport.emails_sent_today}</div>
-                      <div className="text-xs text-gray-400">{t('Emails Sent')}</div>
+                      <div className="text-xs text-slate-500">{t('Emails Sent')}</div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-4 p-4 rounded-lg bg-black/30 border border-white/5 relative">
+                  <div className="relative flex items-center gap-4 rounded-lg border border-amber-200/70 bg-amber-50/70 p-4">
                     {todayReport.high_intent_replies > 0 && (
                       <div className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
                     )}
@@ -115,7 +138,7 @@ export default function DashboardOverview() {
                     </div>
                     <div className="flex-1">
                       <div className="text-2xl font-bold text-amber-400">{todayReport.high_intent_replies}</div>
-                      <div className="text-xs text-gray-400">{t('High-intent Replies')}</div>
+                      <div className="text-xs text-slate-500">{t('High-intent Replies')}</div>
                     </div>
                     {todayReport.high_intent_replies > 0 && (
                       <a href="/dashboard/replies" className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 transition-colors">
@@ -125,7 +148,7 @@ export default function DashboardOverview() {
                   </div>
                 </div>
                 {todayReport.active_workflow_names.length > 0 && (
-                  <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+                  <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
                     <Bot className="w-3.5 h-3.5" />
                     {t('Active Workflows Running')}: {todayReport.active_workflow_names.join(' · ')}
                   </div>
@@ -141,34 +164,35 @@ export default function DashboardOverview() {
               { label: t("Messages Sent"), value: stats.emails_sent, icon: Mail, color: "text-orange-500" },
               { label: t("Total Replies"), value: stats.total_replies, icon: MessageSquare, color: "text-purple-500" }
             ].map((stat, i) => (
-              <motion.div 
+              <motion.div
                 key={i}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className="glass-panel p-5 rounded-lg border border-white/5 relative overflow-hidden group"
+                className="glass-panel group relative overflow-hidden rounded-lg border border-white/5 p-5 transition-transform hover:-translate-y-0.5"
               >
                 <div className="flex justify-between items-start mb-5">
-                  <div className="p-2.5 bg-white/5 rounded-lg ring-1 ring-black/5">
+                  <div className="rounded-lg bg-slate-50 p-2.5 ring-1 ring-slate-200/70">
                     <stat.icon className={`w-6 h-6 ${stat.color}`} />
                   </div>
                 </div>
                 <div className="text-3xl font-semibold tracking-tight text-slate-900 mb-1">{stat.value}</div>
-                <div className="text-sm text-gray-500 font-medium uppercase tracking-wider">{stat.label}</div>
+                <div className="text-sm font-medium uppercase tracking-wider text-slate-500">{stat.label}</div>
               </motion.div>
             ))}
           </div>
 
           <div className="grid lg:grid-cols-3 gap-4 mb-8">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               transition={{ delay: 0.3 }}
-              className="glass-panel p-5 sm:p-6 rounded-lg lg:col-span-2 border border-white/5"
-            >
-              <h2 className="text-lg font-bold mb-6 flex items-center gap-2 text-white">
+                className="glass-panel rounded-lg border border-white/5 p-5 sm:p-6 lg:col-span-2"
+              >
+              <h2 className="mb-6 flex items-center gap-2 text-lg font-semibold text-slate-950">
                 <TrendingUp className="w-5 h-5 text-indigo-500" /> {t('Performance Trends (14 Days)')}
               </h2>
+              {trends.length > 0 && (
               <div className="h-[300px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={trends} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -195,38 +219,139 @@ export default function DashboardOverview() {
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
+              )}
+              {trends.length === 0 && (
+                <div className="flex h-[300px] items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50/70 text-sm text-slate-500">
+                  {t('No data')}
+                </div>
+              )}
             </motion.div>
 
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.4 }}
-              className="glass-panel p-5 sm:p-6 rounded-lg border border-white/5 relative overflow-hidden flex flex-col justify-between"
-            >
+            <div className="self-start">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.4 }}
+                className="glass-panel relative flex flex-col overflow-hidden rounded-lg border border-white/5 p-5 sm:p-6"
+              >
               <div>
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-white">
+                <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-950">
                   <Bot className="w-5 h-5 text-emerald-500" /> {t('System Status')}
                 </h2>
-                <div className="space-y-4 relative z-10">
-                  <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
+                <div className="space-y-3 relative z-10">
+                  {/* 1. Database Connection */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{t('Database Connection')}</div>
+                      <div className="text-xs text-gray-400">{t('MySQL Enterprise DB')}</div>
+                    </div>
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.database === 'online' ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${health?.database === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
+                      {health?.database === 'online' ? t('Online') : t('Offline')}
+                    </div>
+                  </div>
+
+                  {/* 2. Outbound Engine */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Outbound Engine')}</div>
                       <div className="text-xs text-gray-400">{health ? `${health.active_workflows} active · ${health.recent_emails_30m} sent/30m` : t('Background workers')}</div>
                     </div>
-                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
-                      health?.outbound_engine === 'active' ? 'text-emerald-500 bg-emerald-500/10' : 'text-amber-500 bg-amber-500/10'
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.outbound_engine_thread === 'running'
+                        ? health?.outbound_engine === 'active' ? 'text-emerald-500 bg-emerald-500/10' : 'text-amber-500 bg-amber-500/10'
+                        : health?.outbound_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
-                      <div className={`w-2 h-2 rounded-full ${health?.outbound_engine === 'active' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></div>
-                      {health?.outbound_engine === 'active' ? t('Online') : health?.outbound_engine === 'idle' ? 'Idle' : t('Offline')}
+                      <div className={`w-2 h-2 rounded-full ${
+                        health?.outbound_engine_thread === 'running'
+                          ? health?.outbound_engine === 'active' ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                          : health?.outbound_engine_thread === 'disabled' ? 'bg-gray-400' : 'bg-rose-400'
+                      }`}></div>
+                      {health?.outbound_engine_thread === 'running'
+                        ? health?.outbound_engine === 'active' ? t('Online') : t('Idle')
+                        : health?.outbound_engine_thread === 'disabled' ? t('Disabled') : t('Offline')
+                      }
                     </div>
                   </div>
 
-                  <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
+                  {/* 3. Prospecting Engine */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{t('Prospecting Engine')}</div>
+                      <div className="text-xs text-gray-400">{t('Automated lead sourcing')}</div>
+                    </div>
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.prospecting_engine_thread === 'running'
+                        ? 'text-emerald-500 bg-emerald-500/10'
+                        : health?.prospecting_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${
+                        health?.prospecting_engine_thread === 'running'
+                          ? 'bg-emerald-400 animate-pulse'
+                          : health?.prospecting_engine_thread === 'disabled' ? 'bg-gray-400' : 'bg-rose-400'
+                      }`}></div>
+                      {health?.prospecting_engine_thread === 'running'
+                        ? t('Online')
+                        : health?.prospecting_engine_thread === 'disabled' ? t('Disabled') : t('Offline')
+                      }
+                    </div>
+                  </div>
+
+                  {/* 4. Inbox Monitor */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{t('Inbox Monitor')}</div>
+                      <div className="text-xs text-gray-400">{t('Reply detection daemon')}</div>
+                    </div>
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.inbox_monitor_thread === 'running'
+                        ? 'text-emerald-500 bg-emerald-500/10'
+                        : health?.inbox_monitor_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${
+                        health?.inbox_monitor_thread === 'running'
+                          ? 'bg-emerald-400 animate-pulse'
+                          : health?.inbox_monitor_thread === 'disabled' ? 'bg-gray-400' : 'bg-rose-400'
+                      }`}></div>
+                      {health?.inbox_monitor_thread === 'running'
+                        ? t('Online')
+                        : health?.inbox_monitor_thread === 'disabled' ? t('Disabled') : t('Offline')
+                      }
+                    </div>
+                  </div>
+
+                  {/* 5. Omnichannel Router */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{t('Omnichannel Router')}</div>
+                      <div className="text-xs text-gray-400">{t('WhatsApp/LinkedIn router')}</div>
+                    </div>
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.omnichannel_engine_thread === 'running'
+                        ? 'text-emerald-500 bg-emerald-500/10'
+                        : health?.omnichannel_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                    }`}>
+                      <div className={`w-2 h-2 rounded-full ${
+                        health?.omnichannel_engine_thread === 'running'
+                          ? 'bg-emerald-400 animate-pulse'
+                          : health?.omnichannel_engine_thread === 'disabled' ? 'bg-gray-400' : 'bg-rose-400'
+                      }`}></div>
+                      {health?.omnichannel_engine_thread === 'running'
+                        ? t('Online')
+                        : health?.omnichannel_engine_thread === 'disabled' ? t('Disabled') : t('Offline')
+                      }
+                    </div>
+                  </div>
+
+                  {/* 6. Research Agent */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Research Agent')}</div>
                       <div className="text-xs text-gray-400">{health?.llm_api_configured ? t('DeepSeek LLM Models') : 'LLM not configured'}</div>
                     </div>
-                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.llm_api_configured ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
                       <div className={`w-2 h-2 rounded-full ${health?.llm_api_configured ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
@@ -234,16 +359,17 @@ export default function DashboardOverview() {
                     </div>
                   </div>
 
-                  <div className="p-4 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-4">
+                  {/* 7. Unipile Integration */}
+                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Unipile Integration')}</div>
-                      <div className="text-xs text-gray-400">{health ? `${health.unipile_accounts} accounts` : t('Omnichannel webhooks')}</div>
+                      <div className="text-xs text-gray-400">{health ? `${health.unipile_accounts} ${t('accounts connected')}` : t('Omnichannel webhooks')}</div>
                     </div>
-                    <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full ${
-                      health?.unipile_accounts ? 'text-emerald-500 bg-emerald-500/10' : 'text-gray-500 bg-gray-500/10'
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      health?.unipile_status === 'online' ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
-                      <div className={`w-2 h-2 rounded-full ${health?.unipile_accounts ? 'bg-emerald-400' : 'bg-gray-400'}`}></div>
-                      {health?.unipile_accounts ? t('Connected') : 'Not Connected'}
+                      <div className={`w-2 h-2 rounded-full ${health?.unipile_status === 'online' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
+                      {health?.unipile_status === 'online' ? t('Online') : t('Offline')}
                     </div>
                   </div>
                 </div>
@@ -260,6 +386,7 @@ export default function DashboardOverview() {
                 </ul>
               </div>
             </motion.div>
+          </div>
           </div>
         </>
       )}

@@ -1,6 +1,6 @@
 import requests
 import logging
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
 logger = logging.getLogger("outbound_engine")
 
@@ -71,3 +71,25 @@ class ApolloClient:
         except Exception as e:
             logger.error(f"[APOLLO] Exception in enrich_person: {e}")
             return None
+
+    def get_usage_stats(self) -> Optional[Dict[str, Any]]:
+        """
+        View Apollo API usage stats and rate limits.
+        Requires an Apollo master API key.
+        """
+        url = "https://api.apollo.io/api/v1/usage_stats/api_usage_stats"
+        headers = dict(self.session.headers)
+        headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            resp = self.session.post(url, headers=headers, json={}, timeout=8)
+            if resp.status_code != 200:
+                logger.error(f"[APOLLO] Usage stats API Error {resp.status_code}: {resp.text[:300]}")
+                return {
+                    "error": f"HTTP {resp.status_code}",
+                    "status_code": resp.status_code,
+                }
+            return resp.json()
+        except Exception as e:
+            logger.error(f"[APOLLO] Exception in get_usage_stats: {e}")
+            return {"error": str(e)}

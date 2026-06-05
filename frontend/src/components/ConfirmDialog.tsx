@@ -33,19 +33,19 @@ export default function ConfirmDialog({
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-slate-950/35 backdrop-blur-sm"
         onClick={onCancel}
       />
 
       {/* Dialog */}
-      <div className="relative z-10 w-full max-w-md mx-4 bg-slate-900 border border-slate-700/50 rounded-xl shadow-2xl p-6 animate-in">
+      <div className="relative z-10 mx-4 w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-slate-950 shadow-2xl shadow-slate-950/15 animate-in">
         <div className="flex items-start gap-4">
           <div className={`p-2.5 rounded-full shrink-0 ${variant === 'danger' ? 'bg-rose-500/10' : 'bg-amber-500/10'}`}>
             <AlertTriangle className={`w-5 h-5 ${variant === 'danger' ? 'text-rose-400' : 'text-amber-400'}`} />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
-            <p className="text-sm text-gray-400">{message}</p>
+            <h3 className="mb-1 text-lg font-semibold text-slate-950">{title}</h3>
+            <p className="text-sm text-slate-500">{message}</p>
           </div>
         </div>
 
@@ -53,7 +53,7 @@ export default function ConfirmDialog({
           <Button
             variant="glass"
             onClick={onCancel}
-            className="text-gray-300 hover:text-white"
+            className="border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
           >
             {cancelLabel || t('Cancel')}
           </Button>

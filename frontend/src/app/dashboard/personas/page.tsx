@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Users, Plus, RefreshCw, Trash2, Target, Pencil } from 'lucide-react';
 import { apiFetch } from '@/lib/utils';
@@ -90,7 +90,7 @@ export default function PersonasPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
-  const fetchPersonas = async () => {
+  const fetchPersonas = useCallback(async () => {
     setIsLoading(true);
     try {
       const res = await apiFetch('/api/personas/');
@@ -104,11 +104,11 @@ export default function PersonasPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [t]);
 
   useEffect(() => {
     fetchPersonas();
-  }, []);
+  }, [fetchPersonas]);
 
   const openCreateDialog = () => {
     setEditingPersona(null);

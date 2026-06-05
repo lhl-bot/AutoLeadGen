@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime, Boolean, JSON, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from database import Base
@@ -13,6 +13,8 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    credit_wallet = relationship("CreditWallet", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 
 class ClientPool(Base):
@@ -120,6 +122,9 @@ class EmailAccount(Base):
 
 class ChannelAccount(Base):
     __tablename__ = "channel_accounts"
+    __table_args__ = (
+        Index("ix_channel_accounts_status", "status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -141,6 +146,9 @@ class WorkflowEmail(Base):
 
 class ProcessedDomain(Base):
     __tablename__ = "processed_domains"
+    __table_args__ = (
+        Index("ix_processed_domains_created_at", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=False)
@@ -151,6 +159,10 @@ class ProcessedDomain(Base):
 
 class Lead(Base):
     __tablename__ = "leads"
+    __table_args__ = (
+        Index("ix_leads_created_source_channel", "created_at", "source_channel"),
+        Index("ix_leads_updated_at", "updated_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=True)
@@ -197,6 +209,9 @@ class Lead(Base):
 
 class EmailLog(Base):
     __tablename__ = "email_logs"
+    __table_args__ = (
+        Index("ix_email_logs_direction_sent_at", "direction", "sent_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)
@@ -212,8 +227,77 @@ class EmailLog(Base):
     
     lead = relationship("Lead", back_populates="email_logs")
 
+
+class EmailSuppression(Base):
+    """Recipients or domains that must not be contacted again."""
+    __tablename__ = "email_suppressions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "email", name="uq_email_suppression_user_email"),
+        UniqueConstraint("user_id", "domain", name="uq_email_suppression_user_domain"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
+    domain = Column(String(255), nullable=True, index=True)
+    reason = Column(String(100), default="manual", nullable=False)
+    source = Column(String(100), default="system", nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    lead = relationship("Lead")
+
+
+class CreditWallet(Base):
+    """Per-user credit balance for commercial usage limits."""
+    __tablename__ = "credit_wallets"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_credit_wallets_user_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    balance = Column(Integer, default=0, nullable=False)
+    lifetime_granted = Column(Integer, default=0, nullable=False)
+    lifetime_used = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="credit_wallet")
+    transactions = relationship("CreditTransaction", back_populates="wallet", cascade="all, delete-orphan")
+
+
+class CreditTransaction(Base):
+    """Immutable-ish ledger row for every credit grant, debit, refund, or adjustment."""
+    __tablename__ = "credit_transactions"
+    __table_args__ = (
+        Index("ix_credit_transactions_user_created", "user_id", "created_at"),
+        Index("ix_credit_transactions_action_created", "action", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    wallet_id = Column(Integer, ForeignKey("credit_wallets.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount = Column(Integer, nullable=False, doc="Positive for grant/refund, negative for usage")
+    balance_after = Column(Integer, nullable=False)
+    transaction_type = Column(String(50), nullable=False, doc="grant, debit, refund, adjustment")
+    action = Column(String(100), nullable=False, doc="email_send, ai_reply_draft, linkedin_invite, whatsapp_message, etc.")
+    description = Column(String(500), nullable=True)
+    reference_type = Column(String(100), nullable=True)
+    reference_id = Column(String(100), nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    wallet = relationship("CreditWallet", back_populates="transactions")
+    user = relationship("User", foreign_keys=[user_id])
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+
 class LeadBrief(Base):
     __tablename__ = "lead_briefs"
+    __table_args__ = (
+        Index("ix_lead_briefs_created_at", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False, unique=True)
@@ -243,6 +327,9 @@ class ChatSession(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        Index("ix_chat_messages_role_created_at", "role", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("chat_sessions.id"), nullable=False)
@@ -256,6 +343,9 @@ class ChatMessage(Base):
 class MessageLog(Base):
     """Unified log for all omnichannel messages (LinkedIn, WhatsApp, etc.)"""
     __tablename__ = "message_logs"
+    __table_args__ = (
+        Index("ix_message_logs_direction_sent_channel", "direction", "sent_at", "channel"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"), nullable=False)

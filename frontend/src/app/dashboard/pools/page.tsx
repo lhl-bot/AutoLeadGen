@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { Database, Plus, RefreshCw, Trash2, Download, Search, Mail as MailIcon, ThumbsUp, ThumbsDown, ShieldCheck, ShieldAlert, ShieldX, Copy, Check, User, Building, Target, Zap, Sparkles, FileText } from 'lucide-react';
-import { apiFetch } from '@/lib/utils';
+import { apiFetch, formatApiDetail } from '@/lib/utils';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import {
   Dialog,
@@ -49,6 +49,8 @@ export default function PoolsPage() {
   const [isBriefLoading, setIsBriefLoading] = useState(false);
   const [briefError, setBriefError] = useState<string | null>(null);
   const [copiedDraft, setCopiedDraft] = useState(false);
+  const [sendingDraftId, setSendingDraftId] = useState<number | null>(null);
+  const [sendDraftMessage, setSendDraftMessage] = useState('');
 
   // Delete confirmation state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -240,6 +242,7 @@ export default function PoolsPage() {
     setSelectedLead(lead);
     setLeadBrief(null);
     setBriefError(null);
+    setSendDraftMessage('');
     setIsBriefLoading(true);
     try {
       const res = await apiFetch(`/api/leads/${lead.id}/brief`);
@@ -261,6 +264,33 @@ export default function PoolsPage() {
     navigator.clipboard.writeText(text);
     setCopiedDraft(true);
     setTimeout(() => setCopiedDraft(false), 2000);
+  };
+
+  const sendReviewedDraft = async (lead: Lead) => {
+    if (!lead.ai_draft) return;
+    setSendingDraftId(lead.id);
+    setSendDraftMessage('');
+    try {
+      const res = await apiFetch(`/api/leads/${lead.id}/send-draft`, {
+        method: 'POST',
+        body: JSON.stringify({ draft: lead.ai_draft })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        setSendDraftMessage(formatApiDetail(data.detail || data.message, txt('Send was blocked.', '发送已被拦截。')));
+        return;
+      }
+
+      const updatedLead = { ...lead, status: data.status || 'sent' };
+      setSelectedLead(updatedLead);
+      setLeads(prev => prev.map(item => item.id === lead.id ? updatedLead : item));
+      setSendDraftMessage(txt('Email sent successfully.', '邮件已发送。'));
+    } catch (e) {
+      console.error(e);
+      setSendDraftMessage(txt('Network error while sending.', '发送时发生网络错误。'));
+    } finally {
+      setSendingDraftId(null);
+    }
   };
 
   return (
@@ -742,9 +772,22 @@ export default function PoolsPage() {
                 <p className="text-xs text-slate-400 mt-2">{txt('AI will scan the website and generate a brief when you run a workflow.', '当运行工作流开发客户时，AI 会自动浏览其网站并生成此简介。')}</p>
                 {selectedLead?.ai_draft && (
                   <div className="mt-8 text-left border-t border-slate-100 pt-6">
-                    <h3 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
-                      <MailIcon className="w-4 h-4 text-slate-400" /> {txt('Email draft generated:', '即使无简介，已生成邮件草稿:')}
-                    </h3>
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                        <MailIcon className="w-4 h-4 text-slate-400" /> {txt('Email draft generated:', '即使无简介，已生成邮件草稿:')}
+                      </h3>
+                      {selectedLead.email && (
+                        <Button
+                          size="sm"
+                          onClick={() => sendReviewedDraft(selectedLead)}
+                          disabled={sendingDraftId === selectedLead.id}
+                          className="gap-2 bg-indigo-600 text-white hover:bg-indigo-700"
+                        >
+                          <MailIcon className="w-3.5 h-3.5" />
+                          {sendingDraftId === selectedLead.id ? txt('Sending...', '发送中...') : txt('Send reviewed draft', '发送已审核草稿')}
+                        </Button>
+                      )}
+                    </div>
                     <div className="relative group rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
                       {selectedLead.ai_draft}
                       <button
@@ -759,6 +802,9 @@ export default function PoolsPage() {
                         )}
                       </button>
                     </div>
+                    {sendDraftMessage && (
+                      <p className="mt-3 text-xs text-slate-500">{sendDraftMessage}</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -833,25 +879,38 @@ export default function PoolsPage() {
                 {/* Right Column: AI Generated Email Draft */}
                 <div className="flex flex-col h-full space-y-4">
                   <div className="flex-grow flex flex-col rounded-xl border border-slate-100 bg-slate-50/50 p-5 shadow-sm h-full">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                       <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                         <MailIcon className="w-4 h-4 text-indigo-600" /> {txt('AI Outbound Email Draft', 'AI 智能发信草稿')}
                       </h3>
                       {selectedLead?.ai_draft && (
-                        <button
-                          onClick={() => handleCopyDraft(selectedLead.ai_draft || '')}
-                          className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
-                        >
-                          {copiedDraft ? (
-                            <>
-                              <Check className="w-3.5 h-3.5 text-emerald-500" /> {txt('Copied!', '已复制!')}
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" /> {txt('Copy Draft', '复制草稿')}
-                            </>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            onClick={() => handleCopyDraft(selectedLead.ai_draft || '')}
+                            className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                          >
+                            {copiedDraft ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 text-emerald-500" /> {txt('Copied!', '已复制!')}
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3.5 h-3.5" /> {txt('Copy Draft', '复制草稿')}
+                              </>
+                            )}
+                          </button>
+                          {selectedLead.email && (
+                            <Button
+                              size="sm"
+                              onClick={() => sendReviewedDraft(selectedLead)}
+                              disabled={sendingDraftId === selectedLead.id}
+                              className="h-8 gap-2 bg-indigo-600 text-white hover:bg-indigo-700"
+                            >
+                              <MailIcon className="w-3.5 h-3.5" />
+                              {sendingDraftId === selectedLead.id ? txt('Sending...', '发送中...') : txt('Send reviewed draft', '发送已审核草稿')}
+                            </Button>
                           )}
-                        </button>
+                        </div>
                       )}
                     </div>
                     
@@ -865,6 +924,9 @@ export default function PoolsPage() {
                         <p className="text-xs text-slate-500 font-medium">{txt('No email draft generated for this lead', '尚未为该客户生成邮件草稿')}</p>
                         <p className="text-[11px] text-slate-400 mt-1">{txt('Please run a workflow, and the system will automatically generate personalized messages.', '请运行工作流，系统会自动评估并生成专属发信内容。')}</p>
                       </div>
+                    )}
+                    {sendDraftMessage && (
+                      <p className="text-xs text-slate-500">{sendDraftMessage}</p>
                     )}
                   </div>
                 </div>

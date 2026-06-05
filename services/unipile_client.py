@@ -79,21 +79,34 @@ class UnipileClient:
             logger.error(f"Failed to get Unipile account status: {e}")
             return None
 
-    async def get_all_accounts(self) -> list:
+    async def get_all_accounts(self, timeout: float = 4.0) -> Optional[list]:
         """Fetch all connected accounts from Unipile."""
+        self.last_error_status = None
+        self.last_error_body = ""
+        if not self.api_key:
+            self.last_error_body = "UNIPILE_API_KEY is not configured"
+            return None
+
         url = f"{self.dsn}/api/v1/accounts"
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(url, headers=self.headers, timeout=10.0)
+                resp = await client.get(url, headers=self.headers, timeout=timeout)
                 if resp.status_code == 200:
                     data = resp.json()
                     # It returns an object {"items": [...]} or just a list? Usually {"items": ...} or direct list
                     return data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                self.last_error_status = resp.status_code
+                self.last_error_body = resp.text
                 logger.error(f"Failed to get all Unipile accounts: {resp.status_code} - {resp.text}")
-                return []
+                return None
+        except httpx.TimeoutException as e:
+            self.last_error_body = str(e) or f"Timed out after {timeout}s"
+            logger.error(f"Timed out getting all Unipile accounts: {self.last_error_body}")
+            return None
         except Exception as e:
+            self.last_error_body = str(e)
             logger.error(f"Exception getting all Unipile accounts: {e}")
-            return []
+            return None
 
     async def send_linkedin_invitation(self, account_id: str, provider_id: str, message: str) -> bool:
         """Sends a LinkedIn connection request with an optional note."""

@@ -142,6 +142,7 @@ export interface Workflow {
   avg_fit_score?: number
   handoff_count?: number
   client_pool_name?: string | null
+  persona_name?: string | null
   playbook_type?: string
 }
 
@@ -236,7 +237,32 @@ export interface User {
   display_name?: string | null
   is_admin: boolean
   is_active: boolean
+  credit_balance?: number
   created_at?: string | null
+}
+
+export interface CreditSummary {
+  user_id: number
+  balance: number
+  lifetime_granted: number
+  lifetime_used: number
+  pricing: Record<string, number>
+  credits_enabled: boolean
+  updated_at?: string | null
+}
+
+export interface CreditTransaction {
+  id: number
+  user_id: number
+  amount: number
+  balance_after: number
+  transaction_type: string
+  action: string
+  description?: string | null
+  reference_type?: string | null
+  reference_id?: string | null
+  created_by_user_id?: number | null
+  created_at: string
 }
 
 export interface LeadBrief {
@@ -253,3 +279,36 @@ export interface LeadBrief {
   updated_at: string
 }
 
+export interface ApiUsageProvider {
+  key: string
+  name: string
+  category: string
+  configured: boolean
+  status: 'ok' | 'warning' | 'missing' | 'error'
+  balance_label: string
+  balance_value?: number | null
+  balance_unit?: string | null
+  usage_30d: number
+  usage_label: string
+  details: Record<string, string | number | boolean | null | undefined>
+  error?: string | null
+  docs_url?: string | null
+}
+
+export interface ApiUsageSummary {
+  updated_at: string
+  window_days: number
+  totals: {
+    configured_providers: number
+    ok_providers: number
+    warning_providers: number
+    known_balance_providers: number
+    local_events_30d: number
+  }
+  providers: ApiUsageProvider[]
+  local_usage: Array<{
+    key: string
+    label: string
+    count: number
+  }>
+}

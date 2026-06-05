@@ -22,6 +22,7 @@ import {
   PanelLeftOpen,
   UserCog,
   LogOut,
+  WalletCards,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
@@ -29,6 +30,33 @@ import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 const COLLAPSED_STORAGE_KEY = 'autoleadgen.sidebar.collapsed';
+
+function readStorageItem(key: string) {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageItem(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
+
+function removeStorageItem(key: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
 
 export default function DashboardLayout({
   children,
@@ -40,49 +68,54 @@ export default function DashboardLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [creditBalance, setCreditBalance] = useState<number | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const { t } = useTranslation();
 
   // Route guard: check for auth token, redirect to /login if missing.
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const token = window.localStorage.getItem('auth_token');
+    const token = readStorageItem('auth_token');
     if (!token) {
-      router.replace('/login');
+      window.location.replace('/login');
       return;
     }
     setAuthChecked(true);
 
-    const stored = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    const stored = readStorageItem(COLLAPSED_STORAGE_KEY);
     if (stored === '1') setDesktopCollapsed(true);
 
-    // Verify admin status from backend, not localStorage
-    fetch(apiUrl('/api/auth/me'), {
-      headers: { 'Authorization': `Bearer ${token}` },
-    }).then(res => {
-      if (res.ok) return res.json();
-      throw new Error('Failed to fetch user');
-    }).then(user => {
-      if (user.is_admin) setIsAdmin(true);
-      // Sync backend truth to localStorage
-      window.localStorage.setItem('auth_user', JSON.stringify(user));
-    }).catch(() => {
-      // Fall back to localStorage if backend unreachable
-      const userStr = window.localStorage.getItem('auth_user');
-      if (userStr) {
-        try {
-          const user = JSON.parse(userStr);
-          if (user.is_admin) setIsAdmin(true);
-        } catch {}
-      }
-    });
+    const userStr = readStorageItem('auth_user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        setIsAdmin(Boolean(user.is_admin));
+        if (typeof user.credit_balance === 'number') setCreditBalance(user.credit_balance);
+      } catch {}
+    }
+
+    // Refresh backend truth after the page has had a moment to render.
+    const verifyTimer = window.setTimeout(() => {
+      fetch(apiUrl('/api/auth/me'), {
+        headers: { 'Authorization': `Bearer ${token}` },
+      }).then(res => {
+        if (res.ok) return res.json();
+        throw new Error('Failed to fetch user');
+      }).then(user => {
+        setIsAdmin(Boolean(user.is_admin));
+        if (typeof user.credit_balance === 'number') setCreditBalance(user.credit_balance);
+        writeStorageItem('auth_user', JSON.stringify(user));
+      }).catch(() => {
+        // Keep the locally cached menu state if the backend is temporarily slow.
+      });
+    }, 2500);
+
+    return () => window.clearTimeout(verifyTimer);
   }, [router]);
 
   const handleLogout = () => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem('auth_token');
-      window.localStorage.removeItem('auth_user');
-    }
+    removeStorageItem('auth_token');
+    removeStorageItem('auth_user');
     router.replace('/login');
   };
 
@@ -99,7 +132,7 @@ export default function DashboardLayout({
     setDesktopCollapsed(prev => {
       const next = !prev;
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem(COLLAPSED_STORAGE_KEY, next ? '1' : '0');
+        writeStorageItem(COLLAPSED_STORAGE_KEY, next ? '1' : '0');
       }
       return next;
     });
@@ -119,10 +152,11 @@ export default function DashboardLayout({
 
     { name: t('Replies'), href: '/dashboard/replies', icon: MessageSquare, section: 'REPORTS' },
     { name: t('Email Logs'), href: '/dashboard/email-logs', icon: History, section: 'REPORTS' },
+    ...(isAdmin ? [{ name: t('API Usage'), href: '/dashboard/api-usage', icon: WalletCards, section: 'REPORTS' }] : []),
   ];
 
   return (
-    <div className="dashboard-ui min-h-screen text-slate-900 flex">
+    <div className="dashboard-ui flex min-h-screen text-slate-900">
       {/* Mobile sidebar toggle */}
       <div className={cn("lg:hidden fixed top-4 left-4 z-50", sidebarOpen && "hidden")}>
         <Button
@@ -130,7 +164,7 @@ export default function DashboardLayout({
           size="icon"
           onClick={() => setSidebarOpen(true)}
           aria-label="Open navigation"
-          className="border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
+          className="border-slate-200 bg-white text-slate-700 shadow-md shadow-slate-900/10 hover:bg-slate-50"
         >
           <Menu className="h-5 w-5" />
         </Button>
@@ -147,7 +181,7 @@ export default function DashboardLayout({
 
       {/* Sidebar */}
       <div className={cn(
-        "fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200/70 bg-white/90 shadow-xl shadow-slate-900/5 backdrop-blur-xl transform transition-[transform,width] duration-300 ease-in-out lg:translate-x-0 lg:static lg:relative lg:flex lg:flex-col lg:shadow-none",
+        "fixed inset-y-0 left-0 z-40 w-72 transform border-r border-slate-200/80 bg-white/[0.92] shadow-2xl shadow-slate-900/10 backdrop-blur-xl transition-[transform,width] duration-300 ease-in-out lg:static lg:relative lg:flex lg:flex-col lg:translate-x-0 lg:shadow-none",
         sidebarOpen ? "translate-x-0" : "-translate-x-full",
         desktopCollapsed ? "lg:w-[76px]" : "lg:w-72"
       )}>
@@ -155,14 +189,14 @@ export default function DashboardLayout({
           "flex h-16 items-center border-b border-slate-200/80 shrink-0 transition-[padding] duration-300",
           desktopCollapsed ? "lg:justify-center lg:px-2 px-5 gap-3" : "px-5 gap-3"
         )}>
-          <div className="w-9 h-9 rounded-lg bg-slate-950 flex items-center justify-center shadow-sm shrink-0">
-            <Bot className="w-5 h-5 text-white" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-950 shadow-sm ring-1 ring-slate-950/10">
+            <Bot className="h-5 w-5 text-white" />
           </div>
           <div className={cn(
             "min-w-0 flex-1 transition-opacity duration-200",
             desktopCollapsed ? "lg:hidden" : "block"
           )}>
-            <div className="font-semibold text-base tracking-tight text-slate-950">AutoLeadGen</div>
+            <div className="text-base font-semibold tracking-tight text-slate-950">AutoLeadGen</div>
             <div className="text-xs text-slate-500">{t('AI outbound console')}</div>
           </div>
           
@@ -198,7 +232,7 @@ export default function DashboardLayout({
             onClick={toggleDesktopCollapsed}
             aria-label="Expand sidebar"
             title="Expand sidebar"
-            className="hidden lg:flex absolute top-3 -right-3 z-50 h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 hover:text-indigo-600 hover:border-indigo-200 shadow-md transition-colors"
+            className="absolute top-3 -right-3 z-50 hidden h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-md transition-colors hover:border-indigo-200 hover:text-indigo-600 lg:flex"
           >
             <PanelLeftOpen className="h-3.5 w-3.5" />
           </button>
@@ -210,7 +244,7 @@ export default function DashboardLayout({
         )}>
           <Link href="/dashboard/agent" onClick={() => setSidebarOpen(false)} title="New Chat">
             <Button className={cn(
-              "w-full bg-slate-950 text-white hover:bg-slate-800",
+              "w-full bg-slate-950 text-white shadow-sm shadow-slate-950/10 hover:bg-slate-800",
               desktopCollapsed ? "lg:justify-center lg:px-0 justify-start gap-2" : "justify-start gap-2"
             )}>
               <Plus className="h-4 w-4 shrink-0" />
@@ -242,10 +276,10 @@ export default function DashboardLayout({
                         ? "lg:justify-center lg:px-0 lg:py-2.5 lg:h-10 lg:w-10 lg:mx-auto gap-3 px-3 py-2"
                         : "gap-3 px-3 py-2",
                       isActive
-                        ? "bg-indigo-50 text-indigo-700 shadow-sm ring-1 ring-indigo-100"
+                        ? "bg-slate-950 text-white shadow-sm shadow-slate-950/10"
                         : "text-slate-600 hover:text-slate-950 hover:bg-slate-100/80"
                     )}>
-                      <item.icon className={cn("w-4 h-4 shrink-0", isActive ? "text-indigo-600" : "text-slate-400")} />
+                      <item.icon className={cn("h-4 w-4 shrink-0", isActive ? "text-white" : "text-slate-400")} />
                       <span className={cn(desktopCollapsed ? "lg:hidden" : "inline")}>{item.name}</span>
                     </div>
                   </Link>
@@ -260,13 +294,33 @@ export default function DashboardLayout({
           desktopCollapsed ? "lg:px-2 lg:py-3 px-5 py-4" : "px-5 py-4"
         )}>
           {desktopCollapsed ? (
-            <div
-              className="hidden lg:flex h-9 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600"
-              title={`${t('System Online')} — ${t('Workers and API ready')}`}
-            >
-              <Sparkles className="h-4 w-4" />
+            <div className="hidden lg:flex flex-col gap-2">
+              <div
+                className="flex h-9 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-600"
+                title={`${t('Credits')}: ${creditBalance ?? '—'}`}
+              >
+                <WalletCards className="h-4 w-4" />
+              </div>
+              <div
+                className="flex h-9 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600"
+                title={`${t('System Online')} — ${t('Workers and API ready')}`}
+              >
+                <Sparkles className="h-4 w-4" />
+              </div>
             </div>
           ) : null}
+          <div className={cn(
+            "mb-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2",
+            desktopCollapsed ? "lg:hidden" : "block"
+          )}>
+            <div className="flex items-center justify-between gap-2 text-sm font-medium text-indigo-700">
+              <span className="flex items-center gap-2">
+                <WalletCards className="h-4 w-4" />
+                {t('Credits')}
+              </span>
+              <span className="tabular-nums">{creditBalance ?? '—'}</span>
+            </div>
+          </div>
           <div className={cn(
             "rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2",
             desktopCollapsed ? "lg:hidden" : "block"
@@ -284,11 +338,20 @@ export default function DashboardLayout({
       </div>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-screen overflow-hidden">
+      <div className="flex min-h-screen flex-1 flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="h-16 border-b border-slate-200/50 bg-white/50 backdrop-blur-md flex items-center justify-end px-6 lg:px-10 shrink-0">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-slate-200/70 bg-white/70 px-5 backdrop-blur-md sm:px-6 lg:px-10">
+          <div className="ml-12 min-w-0 lg:ml-0">
+            <div className="text-sm font-semibold text-slate-900">{t('AI outbound console')}</div>
+            <div className="hidden text-xs text-slate-500 sm:block">{t('Workers and API ready')}</div>
+          </div>
           {/* Language Switcher & Logout */}
           <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 sm:flex">
+              <WalletCards className="h-4 w-4" />
+              <span>{t('Credits')}</span>
+              <span className="tabular-nums">{creditBalance ?? '—'}</span>
+            </div>
             <LanguageSwitcher />
             <button
               type="button"

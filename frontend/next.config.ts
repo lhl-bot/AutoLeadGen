@@ -2,8 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   trailingSlash: false,
-  // @ts-ignore - proxyTimeout is a custom extension for turbopack/webpack proxy
-  proxyTimeout: 60_000, // 60s for slow LLM endpoints
+  allowedDevOrigins: ['127.0.0.1'],
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8001";
     return [

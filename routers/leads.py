@@ -2,15 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Optional
+from pydantic import BaseModel
 
 import models, schemas
 from database import get_db
 from services.auth import get_current_user
+from services.credits import InsufficientCreditsError
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 
-@router.get("/", response_model=List[schemas.Lead])
+class SendDraftRequest(BaseModel):
+    draft: Optional[str] = None
+
+
+@router.get("", response_model=List[schemas.Lead])
+@router.get("/", response_model=List[schemas.Lead], include_in_schema=False)
 def list_leads(
     workflow_id: Optional[int] = Query(None),
     pool_id: Optional[int] = Query(None),
@@ -43,12 +50,11 @@ def list_leads(
         # Non-admin without specific filter: show only their leads via workflow or pool
         wf_ids = [w.id for w in db.query(models.Workflow.id).filter(models.Workflow.user_id == user.id).all()]
         pool_ids = [p.id for p in db.query(models.ClientPool.id).filter(models.ClientPool.user_id == user.id).all()]
-        from sqlalchemy import or_
         conditions = []
         if wf_ids:
-            conditions.append(models.Lead.workflow_id.in_([r.id for r in wf_ids]))
+            conditions.append(models.Lead.workflow_id.in_(wf_ids))
         if pool_ids:
-            conditions.append(models.Lead.client_pool_id.in_([r.id for r in pool_ids]))
+            conditions.append(models.Lead.client_pool_id.in_(pool_ids))
         if conditions:
             query = query.filter(or_(*conditions))
         else:
@@ -66,7 +72,6 @@ def list_leads(
                 models.Lead.last_name.ilike(search_term))
         )
 
-    total = query.count()
     leads = query.order_by(models.Lead.id.desc()).offset(skip).limit(limit).all()
     return leads
 
@@ -135,9 +140,7 @@ def rate_lead(
     if payload.rating not in ("positive", "negative"):
         raise HTTPException(status_code=400, detail="Rating must be 'positive' or 'negative'")
 
-    db_lead = db.query(models.Lead).filter(models.Lead.id == lead_id).first()
-    if not db_lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    db_lead = _verify_lead_ownership(lead_id, db, user)
 
     # Update the lead's rating
     db_lead.user_rating = payload.rating
@@ -180,6 +183,59 @@ def rate_lead(
         "ok": True,
         "lead_id": lead_id,
         "rating": payload.rating,
+    }
+
+
+@router.post("/{lead_id}/send-draft")
+async def send_reviewed_draft(
+    lead_id: int,
+    payload: SendDraftRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """
+    Send one reviewed AI draft. This is the commercial-safe path when
+    OUTBOUND_AUTO_SEND_DRAFTS is disabled.
+    """
+    db_lead = _verify_lead_ownership(lead_id, db, user)
+    if db_lead.status in {"unsubscribed", "rejected"}:
+        raise HTTPException(status_code=400, detail=f"Lead is {db_lead.status}; sending is blocked")
+    if not db_lead.email:
+        raise HTTPException(status_code=400, detail="Lead has no recipient email")
+    if not db_lead.workflow_id:
+        raise HTTPException(status_code=400, detail="Lead has no workflow")
+
+    draft = (payload.draft or "").strip()
+    if draft:
+        db_lead.ai_draft = draft
+        db_lead.status = "drafted"
+        db.commit()
+    if not (db_lead.ai_draft or "").strip():
+        raise HTTPException(status_code=400, detail="Lead has no reviewed draft to send")
+
+    workflow = db.query(models.Workflow).filter(models.Workflow.id == db_lead.workflow_id).first()
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    from services.outbound_engine import send_lead_email
+    try:
+        await send_lead_email(db_lead, workflow, db, raise_on_credit_error=True)
+    except InsufficientCreditsError as exc:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": "Insufficient credits",
+                "action": exc.action,
+                "required": exc.required,
+                "balance": exc.balance,
+            },
+        ) from exc
+    db.refresh(db_lead)
+    return {
+        "ok": db_lead.status == "sent",
+        "lead_id": db_lead.id,
+        "status": db_lead.status,
+        "message": "Sent" if db_lead.status == "sent" else (db_lead.reply_snippet or "Send was not completed"),
     }
 
 
@@ -260,6 +316,16 @@ def get_feedback_summary(
     )
 
 
+@router.get("/{lead_id}", response_model=schemas.Lead)
+def read_lead(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Return a single lead owned by the current user."""
+    return _verify_lead_ownership(lead_id, db, user)
+
+
 @router.get("/{lead_id}/brief", response_model=schemas.LeadBriefResponse)
 def get_lead_brief(
     lead_id: int,
@@ -284,4 +350,3 @@ def get_lead_brief(
         raise HTTPException(status_code=404, detail="Brief not found for this lead")
         
     return db_lead.brief
-

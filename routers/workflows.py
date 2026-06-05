@@ -11,10 +11,36 @@ from services.auth import get_current_user
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 @router.get("/playbook-presets")
-def get_playbook_presets():
+def get_playbook_presets(user: models.User = Depends(get_current_user)):
     """Return all available playbook presets for the workflow creation UI."""
     from services.playbook_presets import get_all_presets
     return get_all_presets()
+
+
+def _assert_workflow_dependencies_owned(workflow: schemas.WorkflowCreate, db: Session, user: models.User) -> None:
+    if user.is_admin:
+        return
+    if workflow.client_pool_id:
+        pool = db.query(models.ClientPool).filter(
+            models.ClientPool.id == workflow.client_pool_id,
+            models.ClientPool.user_id == user.id,
+        ).first()
+        if not pool:
+            raise HTTPException(status_code=404, detail="Client pool not found")
+    if workflow.persona_id:
+        persona = db.query(models.CustomerPersona).filter(
+            models.CustomerPersona.id == workflow.persona_id,
+            models.CustomerPersona.user_id == user.id,
+        ).first()
+        if not persona:
+            raise HTTPException(status_code=404, detail="Persona not found")
+    if workflow.email_account_ids:
+        owned_count = db.query(models.EmailAccount).filter(
+            models.EmailAccount.id.in_(workflow.email_account_ids),
+            models.EmailAccount.user_id == user.id,
+        ).count()
+        if owned_count != len(set(workflow.email_account_ids)):
+            raise HTTPException(status_code=404, detail="Email account not found")
 
 
 @router.get("/", response_model=List[schemas.WorkflowWithDetails])
@@ -26,6 +52,7 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     sql = text(f"""
         SELECT w.*,
                cp.name AS pool_name,
+               p.name AS persona_name,
                COALESCE(ls.total, 0)       AS leads_count,
                COALESCE(ls.contactable, 0) AS contactable_count,
                COALESCE(ls.needs_email, 0) AS needs_email_count,
@@ -35,6 +62,7 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
                ,COALESCE(es.outbound_count, 0) AS outbound_count
         FROM workflows w
         LEFT JOIN client_pools cp ON w.client_pool_id = cp.id
+        LEFT JOIN customer_personas p ON w.persona_id = p.id
         LEFT JOIN (
             SELECT workflow_id,
                    COUNT(id) AS total,
@@ -146,11 +174,13 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
             "avg_fit_score": float(r.get("avg_fit_score") or 0),
             "handoff_count": int(r.get("handoff_count") or 0),
             "client_pool_name": r["pool_name"],
+            "persona_name": r.get("persona_name"),
         })
     return results
 
 @router.post("/", response_model=schemas.Workflow)
 def create_workflow(workflow: schemas.WorkflowCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    _assert_workflow_dependencies_owned(workflow, db, user)
     wf_data = workflow.model_dump(exclude={"email_account_ids"})
     db_wf = models.Workflow(**wf_data, user_id=user.id)
     db.add(db_wf)
@@ -166,6 +196,7 @@ def create_workflow(workflow: schemas.WorkflowCreate, db: Session = Depends(get_
 
 @router.put("/{workflow_id}", response_model=schemas.Workflow)
 def update_workflow(workflow_id: int, workflow: schemas.WorkflowCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    _assert_workflow_dependencies_owned(workflow, db, user)
     query = db.query(models.Workflow).filter(models.Workflow.id == workflow_id)
     if not user.is_admin:
         query = query.filter(models.Workflow.user_id == user.id)
@@ -210,7 +241,10 @@ def generate_keywords(
 ):
     persona_text = ""
     if req.persona_id:
-        persona = db.query(models.CustomerPersona).filter(models.CustomerPersona.id == req.persona_id).first()
+        persona_query = db.query(models.CustomerPersona).filter(models.CustomerPersona.id == req.persona_id)
+        if not user.is_admin:
+            persona_query = persona_query.filter(models.CustomerPersona.user_id == user.id)
+        persona = persona_query.first()
         if persona:
             persona_text = (
                 f"Name: {persona.name}\n"

@@ -137,6 +137,7 @@ class WorkflowWithDetails(Workflow):
     linkedin_daily_limit: int = 20
     avg_fit_score: Optional[float] = None
     handoff_count: int = 0
+    persona_name: Optional[str] = None
 
 # --- Lead ---
 class LeadBase(BaseModel):
@@ -256,3 +257,41 @@ class LeadBriefResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+# --- Credits ---
+class CreditSummary(BaseModel):
+    user_id: int
+    balance: int
+    lifetime_granted: int
+    lifetime_used: int
+    pricing: dict[str, int]
+    credits_enabled: bool
+    updated_at: Optional[datetime] = None
+
+
+class CreditTransaction(BaseModel):
+    id: int
+    user_id: int
+    amount: int
+    balance_after: int
+    transaction_type: str
+    action: str
+    description: Optional[str] = None
+    reference_type: Optional[str] = None
+    reference_id: Optional[str] = None
+    metadata_json: Optional[dict] = None
+    created_by_user_id: Optional[int] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CreditGrantRequest(BaseModel):
+    amount: int
+    description: Optional[str] = None
+
+
+class CreditLedgerResponse(BaseModel):
+    summary: CreditSummary
+    transactions: List[CreditTransaction]

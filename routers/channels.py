@@ -1,14 +1,46 @@
 import os
+import json
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from database import get_db
+import models
 from models import ChannelAccount, Lead, User
 from services.unipile_client import UnipileClient
 from services.auth import get_current_user
+from services.credits import InsufficientCreditsError, consume_credits, refund_credits
+from services.suppression import owner_id_for_lead, suppression_reason, suppress_lead
 import logging
 
 logger = logging.getLogger("channels_api")
 router = APIRouter(prefix="/api/channels", tags=["channels"])
+
+
+def _insufficient_credits_http(exc: InsufficientCreditsError) -> HTTPException:
+    return HTTPException(
+        status_code=402,
+        detail={
+            "message": "Insufficient credits",
+            "action": exc.action,
+            "required": exc.required,
+            "balance": exc.balance,
+        },
+    )
+
+
+def _verify_lead_ownership(lead_id: int, db: Session, user: User) -> Lead:
+    query = db.query(Lead).outerjoin(
+        models.Workflow, models.Workflow.id == Lead.workflow_id
+    ).outerjoin(
+        models.ClientPool, models.ClientPool.id == Lead.client_pool_id
+    ).filter(Lead.id == lead_id)
+    if not user.is_admin:
+        query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
+    lead = query.first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return lead
 
 @router.post("/auth-link")
 async def create_auth_link(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -32,60 +64,68 @@ async def create_auth_link(request: Request, db: Session = Depends(get_db), user
         raise HTTPException(status_code=500, detail="Failed to generate Unipile auth link.")
 
 @router.get("/accounts")
-async def list_accounts(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+async def list_accounts(sync: bool = False, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """
     Returns all connected Unipile accounts.
-    Actively syncs with Unipile API since local webhooks might fail.
+    Returns local DB accounts by default; pass sync=true to refresh from Unipile.
     """
-    try:
-        client = UnipileClient()
-        unipile_accounts = await client.get_all_accounts()
-        
-        # Keep track of active account IDs from Unipile
-        active_ids = []
-        
-        for up_acc in unipile_accounts:
-            acc_id = up_acc.get("id")
-            if not acc_id:
-                continue
-                
-            active_ids.append(acc_id)
-            status = up_acc.get("status", "OK")
-            provider = (up_acc.get("provider") or up_acc.get("type") or "UNKNOWN").upper()
-            name = up_acc.get("name", f"{provider} Account")
-            
-            db_acc = db.query(ChannelAccount).filter(ChannelAccount.unipile_account_id == acc_id).first()
-            if db_acc:
-                db_acc.status = status
-                db_acc.name = name
-                # Ensure the account_type is synchronized if it is UNKNOWN or mismatching
-                if (db_acc.account_type == "UNKNOWN" or db_acc.account_type != provider) and provider != "UNKNOWN":
-                    db_acc.account_type = provider
+    if sync:
+        try:
+            client = UnipileClient()
+            try:
+                unipile_accounts = await asyncio.wait_for(client.get_all_accounts(timeout=2.0), timeout=2.5)
+            except asyncio.TimeoutError:
+                client.last_error_body = "Timed out syncing Unipile accounts"
+                unipile_accounts = None
+
+            if unipile_accounts is None:
+                logger.info("Skipping Unipile account sync: %s", client.last_error_body or "unknown error")
             else:
-                # Create missing account under current user
-                new_acc = ChannelAccount(
-                    user_id=user.id,
-                    account_type=provider,
-                    unipile_account_id=acc_id,
-                    name=name,
-                    status=status
-                )
-                db.add(new_acc)
-                
-        # Mark accounts not returned by Unipile as 'DISCONNECTED'
-        if active_ids:
-            disconnected_accounts = db.query(ChannelAccount).filter(~ChannelAccount.unipile_account_id.in_(active_ids)).all()
-        else:
-            disconnected_accounts = db.query(ChannelAccount).all()
-            
-        for d_acc in disconnected_accounts:
-            if d_acc.status != "DISCONNECTED":
-                d_acc.status = "DISCONNECTED"
-                logger.info(f"Marked account {d_acc.unipile_account_id} ({d_acc.name}) as DISCONNECTED")
-        
-        db.commit()
-    except Exception as e:
-        logger.error(f"Error syncing accounts with Unipile: {e}")
+                # Keep track of active account IDs from Unipile
+                active_ids = []
+
+                for up_acc in unipile_accounts:
+                    acc_id = up_acc.get("id")
+                    if not acc_id:
+                        continue
+
+                    active_ids.append(acc_id)
+                    status = up_acc.get("status", "OK")
+                    provider = (up_acc.get("provider") or up_acc.get("type") or "UNKNOWN").upper()
+                    name = up_acc.get("name", f"{provider} Account")
+
+                    db_acc = db.query(ChannelAccount).filter(ChannelAccount.unipile_account_id == acc_id).first()
+                    if db_acc:
+                        db_acc.status = status
+                        db_acc.name = name
+                        # Ensure the account_type is synchronized if it is UNKNOWN or mismatching
+                        if (db_acc.account_type == "UNKNOWN" or db_acc.account_type != provider) and provider != "UNKNOWN":
+                            db_acc.account_type = provider
+                    else:
+                        # Create missing account under current user
+                        new_acc = ChannelAccount(
+                            user_id=user.id,
+                            account_type=provider,
+                            unipile_account_id=acc_id,
+                            name=name,
+                            status=status
+                        )
+                        db.add(new_acc)
+
+                # Mark accounts not returned by Unipile as 'DISCONNECTED'
+                if active_ids:
+                    disconnected_accounts = db.query(ChannelAccount).filter(~ChannelAccount.unipile_account_id.in_(active_ids)).all()
+                else:
+                    disconnected_accounts = db.query(ChannelAccount).all()
+
+                for d_acc in disconnected_accounts:
+                    if d_acc.status != "DISCONNECTED":
+                        d_acc.status = "DISCONNECTED"
+                        logger.info(f"Marked account {d_acc.unipile_account_id} ({d_acc.name}) as DISCONNECTED")
+
+                db.commit()
+        except Exception as e:
+            logger.error(f"Error syncing accounts with Unipile: {e}")
 
     # Return local DB accounts after sync (user-filtered)
     if user.is_admin:
@@ -94,18 +134,38 @@ async def list_accounts(db: Session = Depends(get_db), user: User = Depends(get_
         accounts = db.query(ChannelAccount).filter(ChannelAccount.user_id == user.id).all()
     return accounts
 
-def _verify_unipile_signature(request: Request) -> bool:
+
+@router.delete("/accounts/{account_id}")
+def delete_account(account_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Remove a channel account from the local AutoLeadGen account list."""
+    query = db.query(ChannelAccount).filter(ChannelAccount.id == account_id)
+    if not user.is_admin:
+        query = query.filter(ChannelAccount.user_id == user.id)
+    account = query.first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Channel account not found")
+
+    db.delete(account)
+    db.commit()
+    return {"ok": True}
+
+
+def _is_production_env() -> bool:
+    return os.environ.get("APP_ENV", os.environ.get("ENVIRONMENT", "")).lower() in {"prod", "production"}
+
+
+def _verify_unipile_signature(request: Request, raw_body: bytes) -> bool:
     """Verify the X-Unipile-Signature header if a webhook secret is configured."""
     secret = os.environ.get("UNIPILE_WEBHOOK_SECRET", "")
     if not secret:
-        return True  # No secret configured, skip verification
+        return not _is_production_env()
     import hmac, hashlib
     signature = request.headers.get("X-Unipile-Signature", "")
     if not signature:
         return False
-    # Unipile sends the signature as a hex-encoded HMAC-SHA256 of the raw body
-    # We can't re-read the body in FastAPI, so we validate the header presence + timestamp
-    expected = hmac.new(secret.encode(), b"", hashlib.sha256).hexdigest()
+    if signature.startswith("sha256="):
+        signature = signature.removeprefix("sha256=")
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, expected)
 
 
@@ -115,12 +175,13 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
     Receives webhooks from Unipile.
     Examples: account status changes, new incoming messages.
     """
-    if not _verify_unipile_signature(request):
+    raw_body = await request.body()
+    if not _verify_unipile_signature(request, raw_body):
         logger.warning("Unipile webhook signature verification failed")
         raise HTTPException(status_code=403, detail="Invalid signature")
 
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
         event_type = payload.get("type")
         
         logger.info(f"Received Unipile Webhook: {event_type}")
@@ -138,8 +199,8 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
                     acc.account_type = provider_type
                 db.commit()
                 logger.info(f"Updated ChannelAccount {account_id} status to {new_status} (type: {acc.account_type})")
-            elif new_status == "OK":
-                # Create new account (webhook-created accounts go to the first admin, or user 1)
+            elif new_status == "OK" and os.environ.get("UNIPILE_WEBHOOK_ALLOW_ACCOUNT_AUTOCREATE", "").lower() in {"1", "true", "yes", "on"}:
+                # Legacy fallback for single-tenant installs only.
                 admin_user_id = int(os.environ.get("DEFAULT_ADMIN_USER_ID", "1"))
                 new_acc = ChannelAccount(
                     user_id=admin_user_id,
@@ -151,12 +212,20 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
                 db.add(new_acc)
                 db.commit()
                 logger.info(f"Created new ChannelAccount {account_id} with status {new_status} (type: {provider_type})")
+            elif new_status == "OK":
+                logger.warning(
+                    "Received OK account_status webhook for unknown Unipile account %s, "
+                    "but webhook account autocreate is disabled.",
+                    account_id,
+                )
 
         elif event_type == "message":
             # Incoming message (LinkedIn or WhatsApp)
             message_data = payload.get("message", {})
             sender_id = message_data.get("sender_id")
             text = message_data.get("text")
+            if not sender_id:
+                return {"status": "ok"}
             
             # Match sender_id with our Leads
             # Unipile's sender_id matches the LinkedIn profile ID or WhatsApp number
@@ -167,7 +236,16 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
             
             if lead:
                 # We have a reply from a known lead!
-                lead.status = "replied"
+                reply_lower = (text or "").lower()
+                unsub_keywords = [
+                    "unsubscribe", "opt out", "opt-out", "stop messaging",
+                    "stop emailing", "remove me", "do not contact", "don't contact",
+                    "退订", "取消订阅", "不要联系",
+                ]
+                if any(keyword in reply_lower for keyword in unsub_keywords):
+                    suppress_lead(db, lead, reason="unsubscribe", source="unipile_message")
+                else:
+                    lead.status = "replied"
                 lead.reply_snippet = text
                 from datetime import datetime, timezone
                 lead.last_reply_at = datetime.now(timezone.utc)
@@ -192,9 +270,12 @@ async def send_linkedin_manually(request: Request, db: Session = Depends(get_db)
     if not lead_id:
         raise HTTPException(status_code=400, detail="lead_id is required")
     
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
-    if not lead or not lead.linkedin_url:
+    lead = _verify_lead_ownership(lead_id, db, user)
+    if not lead.linkedin_url:
         raise HTTPException(status_code=404, detail="Lead not found or has no LinkedIn URL")
+    blocked_reason = suppression_reason(db, email=lead.email, domain=lead.domain, user_id=owner_id_for_lead(db, lead))
+    if blocked_reason:
+        raise HTTPException(status_code=400, detail=f"Recipient is suppressed: {blocked_reason}")
     
     # Find a connected LinkedIn account owned by this user
     linkedin_account = db.query(ChannelAccount).filter(
@@ -232,7 +313,32 @@ async def send_linkedin_manually(request: Request, db: Session = Depends(get_db)
     if not message:
         raise HTTPException(status_code=500, detail="Failed to generate LinkedIn invite message")
     
-    success = await client.send_linkedin_invitation(linkedin_account.unipile_account_id, provider_id, message)
+    charged = False
+    try:
+        consume_credits(
+            db,
+            user.id,
+            "linkedin_invite",
+            description=f"LinkedIn invite to lead #{lead.id}",
+            reference_type="lead",
+            reference_id=lead.id,
+            metadata={"channel_account_id": linkedin_account.id},
+        )
+        charged = True
+        success = await client.send_linkedin_invitation(linkedin_account.unipile_account_id, provider_id, message)
+    except InsufficientCreditsError as exc:
+        raise _insufficient_credits_http(exc) from exc
+    except Exception:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "linkedin_invite",
+                description=f"Refund failed LinkedIn invite to lead #{lead.id}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
+        raise
     
     if success:
         lead.linkedin_sent = True
@@ -250,6 +356,15 @@ async def send_linkedin_manually(request: Request, db: Session = Depends(get_db)
         db.commit()
         return {"success": True, "message": "LinkedIn invitation sent successfully"}
     else:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "linkedin_invite",
+                description=f"Refund failed LinkedIn invite to lead #{lead.id}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
         raise HTTPException(status_code=500, detail="Failed to send LinkedIn invitation via Unipile")
 
 
@@ -263,9 +378,12 @@ async def send_whatsapp_manually(request: Request, db: Session = Depends(get_db)
     if not lead_id:
         raise HTTPException(status_code=400, detail="lead_id is required")
     
-    lead = db.query(Lead).filter(Lead.id == lead_id).first()
-    if not lead or not lead.whatsapp_number:
+    lead = _verify_lead_ownership(lead_id, db, user)
+    if not lead.whatsapp_number:
         raise HTTPException(status_code=404, detail="Lead not found or has no WhatsApp number")
+    blocked_reason = suppression_reason(db, email=lead.email, domain=lead.domain, user_id=owner_id_for_lead(db, lead))
+    if blocked_reason:
+        raise HTTPException(status_code=400, detail=f"Recipient is suppressed: {blocked_reason}")
     
     # Find a connected WhatsApp account owned by this user
     wa_account = db.query(ChannelAccount).filter(
@@ -297,7 +415,32 @@ async def send_whatsapp_manually(request: Request, db: Session = Depends(get_db)
     if not message:
         raise HTTPException(status_code=500, detail="Failed to generate WhatsApp message")
     
-    success = await client.send_whatsapp_message(wa_account.unipile_account_id, lead.whatsapp_number, message)
+    charged = False
+    try:
+        consume_credits(
+            db,
+            user.id,
+            "whatsapp_message",
+            description=f"WhatsApp message to lead #{lead.id}",
+            reference_type="lead",
+            reference_id=lead.id,
+            metadata={"channel_account_id": wa_account.id},
+        )
+        charged = True
+        success = await client.send_whatsapp_message(wa_account.unipile_account_id, lead.whatsapp_number, message)
+    except InsufficientCreditsError as exc:
+        raise _insufficient_credits_http(exc) from exc
+    except Exception:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "whatsapp_message",
+                description=f"Refund failed WhatsApp message to lead #{lead.id}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
+        raise
     
     if success:
         lead.whatsapp_sent = True
@@ -314,4 +457,13 @@ async def send_whatsapp_manually(request: Request, db: Session = Depends(get_db)
         db.commit()
         return {"success": True, "message": "WhatsApp message sent successfully"}
     else:
+        if charged:
+            refund_credits(
+                db,
+                user.id,
+                "whatsapp_message",
+                description=f"Refund failed WhatsApp message to lead #{lead.id}",
+                reference_type="lead",
+                reference_id=lead.id,
+            )
         raise HTTPException(status_code=500, detail="Failed to send WhatsApp message via Unipile")

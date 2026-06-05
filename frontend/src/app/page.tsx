@@ -1,230 +1,239 @@
 "use client";
 
-import { motion } from 'framer-motion';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Mail, MessageCircle, ArrowRight, CheckCircle2, Play, Users, Target, Zap, BarChart3, Clock, Globe } from 'lucide-react';
 import Link from 'next/link';
+import {
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Clock,
+  Globe,
+  Mail,
+  MessageCircle,
+  Play,
+  Search,
+  Target,
+  Users,
+  Zap,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 export default function LandingPage() {
   const { t } = useTranslation();
 
+  const sequence = [
+    { icon: Mail, title: t('Day 1 Email'), detail: t('Day 1 Detail'), color: 'text-sky-300', bg: 'bg-sky-400/10' },
+    { icon: Users, title: t('Day 3 LinkedIn'), detail: t('Day 3 Detail'), color: 'text-blue-300', bg: 'bg-blue-400/10' },
+    { icon: MessageCircle, title: t('Day 5 WhatsApp'), detail: t('Day 5 Detail'), color: 'text-emerald-300', bg: 'bg-emerald-400/10' },
+  ];
+
+  const features = [
+    { icon: Target, title: t('Lead Sourcing'), desc: t('Lead Sourcing Desc') },
+    { icon: Globe, title: t('Deep Research'), desc: t('Deep Research Desc') },
+    { icon: Users, title: t('Multichannel'), desc: t('Multichannel Desc') },
+    { icon: Zap, title: t('Auto-Drafting'), desc: t('Auto-Drafting Desc') },
+    { icon: BarChart3, title: t('Unified Inbox'), desc: t('Unified Inbox Desc') },
+    { icon: Clock, title: t('24/7 Execution'), desc: t('24/7 Execution Desc') },
+  ];
+
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-foreground font-sans selection:bg-indigo-500/30">
-      {/* Navbar */}
-      <nav className="fixed top-0 w-full z-50 bg-[#0a0a0a]/80 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
+    <div className="min-h-screen bg-slate-950 text-white selection:bg-emerald-400/30">
+      <nav className="fixed top-0 z-50 w-full border-b border-white/10 bg-slate-950/[0.82] backdrop-blur-md">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-6">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-slate-950">
+              <Zap className="h-4 w-4" />
             </div>
-            <span className="text-xl font-bold tracking-tight text-white">AutoLeadGen</span>
+            <span className="text-lg font-semibold">AutoLeadGen</span>
+          </Link>
+          <div className="hidden items-center gap-7 text-sm font-medium text-slate-300 md:flex">
+            <Link href="#product" className="transition-colors hover:text-white">{t('Product')}</Link>
+            <Link href="#solutions" className="transition-colors hover:text-white">{t('Solutions')}</Link>
+            <Link href="#pricing" className="transition-colors hover:text-white">{t('Pricing')}</Link>
           </div>
-          <div className="hidden md:flex items-center gap-8 text-sm font-medium text-gray-400">
-            <Link href="#product" className="hover:text-white transition-colors">{t('Product')}</Link>
-            <Link href="#solutions" className="hover:text-white transition-colors">{t('Solutions')}</Link>
-            <Link href="#pricing" className="hover:text-white transition-colors">{t('Pricing')}</Link>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link href="/login" className="text-sm font-medium text-gray-300 hover:text-white transition-colors">
+          <div className="flex items-center gap-3">
+            <Link href="/login" className="hidden text-sm font-medium text-slate-300 transition-colors hover:text-white sm:inline">
               {t('Log in')}
             </Link>
             <Link href="/login">
-              <Button className="bg-white text-black hover:bg-gray-200 rounded-full px-6">
+              <Button className="h-9 bg-white px-4 text-slate-950 hover:bg-slate-200">
                 {t('Get Started')}
               </Button>
             </Link>
-
             <LanguageSwitcher />
           </div>
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <section className="relative pt-40 pb-20 overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/40 via-[#0a0a0a] to-[#0a0a0a] -z-10" />
-        
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center max-w-4xl mx-auto">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-            >
-                <Badge variant="outline" className="mb-6 border-indigo-500/30 text-indigo-300 bg-indigo-500/10 px-4 py-1.5 rounded-full">
-                  <span className="flex items-center gap-2">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
-                    </span>
-                    AutoLeadGen 2.0 is live
-                  </span>
-                </Badge>
-                <h1 className="text-6xl md:text-7xl font-extrabold tracking-tighter text-white mb-8 leading-[1.1]">
-                  {t('Hero Title Line 1')} <br className="hidden md:block" />
-                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400">
-                    {t('Hero Title Line 2')}
-                  </span>
-                </h1>
-                <p className="text-xl text-gray-400 mb-10 max-w-2xl mx-auto font-light leading-relaxed">
-                  {t('Hero Desc')}
-                </p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                  <Link href="/login" className="w-full sm:w-auto">
-                    <Button size="lg" className="bg-white text-black hover:bg-gray-200 rounded-full h-14 px-8 text-lg w-full">
-                      {t('Free Trial')} <ArrowRight className="ml-2 w-5 h-5" />
-                    </Button>
-                  </Link>
-                  <Button size="lg" variant="outline" className="rounded-full h-14 px-8 text-lg border-white/20 text-white hover:bg-white/5 w-full sm:w-auto">
-                    <Play className="mr-2 w-5 h-5" /> {t('Watch Demo')}
-                  </Button>
-                </div>
-                <div className="mt-10 flex items-center justify-center gap-6 text-sm text-gray-500">
-                  <span className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> {t('No CC')}</span>
-                  <span className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-500" /> {t('14 Days')}</span>
-                </div>
-            </motion.div>
-          </div>
-
-          {/* Omnichannel Animation Showcase */}
-          <motion.div 
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.2 }}
-            className="mt-24 relative"
-          >
-              <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-[2.5rem] blur opacity-20" />
-              <div className="relative bg-[#111] border border-white/10 rounded-[2rem] p-8 md:p-12 shadow-2xl overflow-hidden">
-                <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 blur-[100px] rounded-full pointer-events-none" />
-                <div className="absolute bottom-0 left-0 w-96 h-96 bg-purple-500/10 blur-[100px] rounded-full pointer-events-none" />
-                
-                <div className="flex flex-col md:flex-row items-center justify-between gap-12 relative z-10">
-                  <div className="flex-1 space-y-6">
-                    <h3 className="text-2xl md:text-3xl font-bold text-white">{t('Omnichannel Sequences')}</h3>
-                    <p className="text-gray-400 text-lg">{t('Showcase Desc')}</p>
+      <section className="relative flex min-h-[86dvh] items-center overflow-hidden border-b border-white/10 pt-24">
+        <div className="absolute inset-x-0 bottom-0 top-16 opacity-45" aria-hidden="true">
+          <div className="mx-auto grid h-full max-w-6xl grid-cols-12 gap-4 px-6">
+            <div className="col-span-3 hidden border-x border-white/10 bg-white/[0.03] lg:block" />
+            <div className="col-span-12 grid content-center gap-4 lg:col-span-9">
+              <div className="rounded-lg border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-black/30">
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="h-3 w-36 rounded bg-white/[0.18]" />
+                  <div className="flex gap-2">
+                    <div className="h-7 w-20 rounded bg-emerald-400/[0.18]" />
+                    <div className="h-7 w-20 rounded bg-sky-400/[0.18]" />
                   </div>
-                  
-                  <div className="flex-1 w-full max-w-md relative">
-                    <div className="absolute left-6 top-6 bottom-6 w-0.5 bg-white/10" />
-                    
-                    <motion.div 
-                      initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.5 }}
-                      className="relative pl-16 py-4"
-                    >
-                      <div className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-[#111] border-2 border-indigo-500 z-10" />
-                      <Card className="bg-black/50 border-white/10 backdrop-blur-md">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                            <Mail className="w-5 h-5 text-blue-400" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-white">{t('Day 1 Email')}</div>
-                            <div className="text-xs text-gray-500">{t('Day 1 Detail')}</div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
-
-                    <motion.div 
-                      initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.9 }}
-                      className="relative pl-16 py-4"
-                    >
-                      <div className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-[#111] border-2 border-[#0a66c2] z-10" />
-                      <Card className="bg-black/50 border-white/10 backdrop-blur-md">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-full bg-[#0a66c2]/20 flex items-center justify-center">
-                            <span className="text-[#0a66c2] font-bold">in</span>
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-white">{t('Day 3 LinkedIn')}</div>
-                            <div className="text-xs text-gray-500">{t('Day 3 Detail')}</div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
-
-                    <motion.div 
-                      initial={{ x: 50, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 1.3 }}
-                      className="relative pl-16 py-4"
-                    >
-                      <div className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-[#111] border-2 border-[#25D366] z-10" />
-                      <Card className="bg-black/50 border-white/10 backdrop-blur-md">
-                        <CardContent className="p-4 flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-full bg-[#25D366]/20 flex items-center justify-center">
-                            <MessageCircle className="w-5 h-5 text-[#25D366]" />
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-white">{t('Day 5 WhatsApp')}</div>
-                            <div className="text-xs text-gray-500">{t('Day 5 Detail')}</div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </motion.div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                    <div className="mb-5 h-9 w-9 rounded bg-emerald-400/20" />
+                    <div className="mb-2 h-7 w-16 rounded bg-white/[0.18]" />
+                    <div className="h-3 w-28 rounded bg-white/[0.12]" />
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                    <div className="mb-5 h-9 w-9 rounded bg-sky-400/20" />
+                    <div className="mb-2 h-7 w-20 rounded bg-white/[0.18]" />
+                    <div className="h-3 w-24 rounded bg-white/[0.12]" />
+                  </div>
+                  <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                    <div className="mb-5 h-9 w-9 rounded bg-amber-400/20" />
+                    <div className="mb-2 h-7 w-12 rounded bg-white/[0.18]" />
+                    <div className="h-3 w-28 rounded bg-white/[0.12]" />
                   </div>
                 </div>
               </div>
-          </motion.div>
+              <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-lg border border-white/10 bg-white/[0.05] p-4">
+                  <div className="mb-4 h-3 w-32 rounded bg-white/[0.16]" />
+                  <div className="flex h-40 items-end gap-2">
+                    {[34, 58, 46, 78, 64, 88, 72].map((height, index) => (
+                      <div
+                        key={index}
+                        className="flex-1 rounded-t bg-emerald-300/30"
+                        style={{ height: `${height}%` }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.05] p-4">
+                  <div className="mb-4 h-3 w-28 rounded bg-white/[0.16]" />
+                  <div className="space-y-3">
+                    {[1, 2, 3, 4].map(item => (
+                      <div key={item} className="flex items-center gap-3 rounded border border-white/10 bg-slate-950/[0.55] p-3">
+                        <div className="h-8 w-8 rounded bg-white/[0.12]" />
+                        <div className="flex-1 space-y-2">
+                          <div className="h-2.5 w-3/5 rounded bg-white/[0.18]" />
+                          <div className="h-2.5 w-4/5 rounded bg-white/10" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative z-10 mx-auto w-full max-w-7xl px-5 pb-16 text-center sm:px-6">
+          <div className="mx-auto max-w-4xl">
+            <Badge variant="outline" className="mb-6 border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-emerald-100">
+              <span className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                AutoLeadGen 2.0 is live
+              </span>
+            </Badge>
+            <h1 className="text-5xl font-semibold leading-none sm:text-6xl lg:text-7xl">
+              AutoLeadGen
+            </h1>
+            <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-300 sm:text-lg">
+              {t('Hero Desc')}
+            </p>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <Link href="/login" className="w-full sm:w-auto">
+                <Button size="lg" className="w-full bg-white text-slate-950 hover:bg-slate-200">
+                  {t('Free Trial')} <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Button size="lg" variant="outline" className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10 sm:w-auto">
+                <Play className="h-4 w-4" /> {t('Watch Demo')}
+              </Button>
+            </div>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-4 text-sm text-slate-400">
+              <span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> {t('No CC')}</span>
+              <span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> {t('14 Days')}</span>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* Features Grid */}
-      <section id="product" className="py-24 bg-black">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold text-white mb-4">{t('Features Title')}</h2>
-            <p className="text-xl text-gray-400">{t('Features Desc')}</p>
+      <section id="solutions" className="border-b border-white/10 bg-slate-950 py-20">
+        <div className="mx-auto grid max-w-7xl gap-10 px-5 sm:px-6 lg:grid-cols-[0.85fr_1.15fr] lg:items-center">
+          <div>
+            <p className="mb-3 text-xs font-semibold uppercase text-emerald-300">{t('AI outbound console')}</p>
+            <h2 className="text-3xl font-semibold text-white sm:text-4xl">{t('Omnichannel Sequences')}</h2>
+            <p className="mt-4 text-base leading-7 text-slate-400">{t('Showcase Desc')}</p>
           </div>
-          
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
-              { icon: Target, title: t('Lead Sourcing'), desc: t('Lead Sourcing Desc') },
-              { icon: Globe, title: t('Deep Research'), desc: t('Deep Research Desc') },
-              { icon: Users, title: t('Multichannel'), desc: t('Multichannel Desc') },
-              { icon: Zap, title: t('Auto-Drafting'), desc: t('Auto-Drafting Desc') },
-              { icon: BarChart3, title: t('Unified Inbox'), desc: t('Unified Inbox Desc') },
-              { icon: Clock, title: t('24/7 Execution'), desc: t('24/7 Execution Desc') }
-            ].map((f, i) => (
-              <div key={i} className="bg-[#111] border border-white/5 p-8 rounded-2xl hover:border-indigo-500/30 transition-colors">
-                <div className="w-12 h-12 rounded-xl bg-white/5 flex items-center justify-center mb-6">
-                  <f.icon className="w-6 h-6 text-indigo-400" />
+          <div className="grid gap-3">
+            {sequence.map((item) => (
+              <div
+                key={item.title}
+                className="rounded-lg border border-white/10 bg-white/[0.05] p-4"
+              >
+                <div className="flex items-center gap-4">
+                  <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${item.bg}`}>
+                    <item.icon className={`h-5 w-5 ${item.color}`} />
+                  </div>
+                  <div>
+                    <div className="font-semibold text-white">{item.title}</div>
+                    <div className="text-sm text-slate-400">{item.detail}</div>
+                  </div>
                 </div>
-                <h3 className="text-xl font-bold text-white mb-3">{f.title}</h3>
-                <p className="text-gray-400 leading-relaxed">{f.desc}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* CTA Section */}
-      <section className="py-32 relative overflow-hidden">
-        <div className="absolute inset-0 bg-indigo-600/10" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-600/20 rounded-full blur-[120px] pointer-events-none" />
-        
-        <div className="max-w-4xl mx-auto px-6 text-center relative z-10">
-          <h2 className="text-5xl font-bold text-white mb-8">{t('CTA Title')}</h2>
-          <p className="text-xl text-gray-300 mb-10">{t('CTA Desc')}</p>
-          <Link href="/login">
-            <Button size="lg" className="bg-white text-black hover:bg-gray-200 rounded-full h-14 px-10 text-lg font-bold">
-              {t('CTA Button')}
+      <section id="product" className="bg-slate-100 py-20 text-slate-950">
+        <div className="mx-auto max-w-7xl px-5 sm:px-6">
+          <div className="mb-12 max-w-2xl">
+            <p className="mb-3 text-xs font-semibold uppercase text-indigo-600">{t('Product')}</p>
+            <h2 className="text-3xl font-semibold sm:text-4xl">{t('Features Title')}</h2>
+            <p className="mt-4 text-base leading-7 text-slate-600">{t('Features Desc')}</p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {features.map((feature) => (
+              <div key={feature.title} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm transition-colors hover:border-indigo-200">
+                <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-indigo-600">
+                  <feature.icon className="h-5 w-5" />
+                </div>
+                <h3 className="text-lg font-semibold">{feature.title}</h3>
+                <p className="mt-3 leading-7 text-slate-600">{feature.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section id="pricing" className="bg-white py-20 text-slate-950">
+        <div className="mx-auto max-w-4xl px-5 text-center sm:px-6">
+          <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-slate-950 text-white">
+            <Search className="h-5 w-5" />
+          </div>
+          <h2 className="text-3xl font-semibold sm:text-4xl">{t('CTA Title')}</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-600">{t('CTA Desc')}</p>
+          <Link href="/login" className="mt-8 inline-flex">
+            <Button size="lg" className="bg-slate-950 text-white hover:bg-slate-800">
+              {t('CTA Button')} <ArrowRight className="h-4 w-4" />
             </Button>
           </Link>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-white/10 bg-[#0a0a0a] py-12">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2">
-            <Zap className="w-5 h-5 text-indigo-500" />
-            <span className="text-lg font-bold text-white">AutoLeadGen</span>
+      <footer className="border-t border-slate-200 bg-white py-10 text-slate-600">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-5 px-5 sm:px-6 md:flex-row">
+          <div className="flex items-center gap-2 text-slate-950">
+            <Zap className="h-5 w-5" />
+            <span className="font-semibold">AutoLeadGen</span>
           </div>
-          <div className="text-gray-500 text-sm">
-            {t('Footer Rights')}
-          </div>
+          <div className="text-sm">{t('Footer Rights')}</div>
         </div>
       </footer>
     </div>

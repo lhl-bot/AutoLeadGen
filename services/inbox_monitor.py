@@ -14,6 +14,7 @@ from services.auth import decrypt_smtp_pass
 from database import SessionLocal, db_retry
 from models import EmailAccount, EmailLog, Lead
 from services.followup_engine import analyze_reply_intent, draft_followup_email
+from services.suppression import suppress_lead
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -310,7 +311,7 @@ def check_inbox_for_replies():
                                     is_unsubscribe = any(kw in reply_lower for kw in _unsub_keywords)
                                     
                                     if is_unsubscribe:
-                                        lead.status = "unsubscribed"
+                                        suppress_lead(db, lead, reason="unsubscribe", source="inbound_reply")
                                         lead.last_reply_at = datetime.now(timezone.utc)
                                         lead.reply_snippet = reply_text[:200]
                                         logger.info(f"[UNSUB] Lead {sender_email} requested unsubscribe. Marked as unsubscribed. Msg ID: {msg_id}")

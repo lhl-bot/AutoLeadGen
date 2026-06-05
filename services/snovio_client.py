@@ -167,6 +167,19 @@ class SnovioClient:
     def _mock_fallback_enabled(self) -> bool:
         return _bool_env("SNOVIO_ENABLE_MOCK_FALLBACK", False)
 
+    def get_balance(self) -> Optional[Dict[str, Any]]:
+        """Return the Snov.io account balance payload, if credentials work."""
+        if not self._authenticate():
+            return None
+
+        return self._request_json(
+            "GET",
+            "https://api.snov.io/v1/get-balance",
+            headers={"Accept": "application/json"},
+            params={"access_token": self.access_token},
+            timeout=8,
+        )
+
     def get_domain_emails_count(self, domain: str) -> Optional[int]:
         """Return Snov.io's available email count for a domain.
 

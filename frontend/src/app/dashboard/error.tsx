@@ -19,13 +19,13 @@ export default function DashboardError({
   }, [error]);
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
-      <div className="glass-panel p-10 rounded-lg border border-red-500/20 max-w-md w-full text-center">
+    <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
+      <div className="w-full max-w-md rounded-lg border border-red-200 bg-white p-10 text-center shadow-xl shadow-slate-950/10">
         <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-6">
           <AlertTriangle className="w-6 h-6 text-red-400" />
         </div>
-        <h2 className="text-xl font-semibold text-white mb-2">{t('Error') || 'Something went wrong'}</h2>
-        <p className="text-sm text-gray-400 mb-6">
+        <h2 className="mb-2 text-xl font-semibold text-slate-950">{t('Error') || 'Something went wrong'}</h2>
+        <p className="mb-6 text-sm text-slate-500">
           {error.message || 'An unexpected error occurred while loading this page.'}
         </p>
         <Button

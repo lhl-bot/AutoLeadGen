@@ -29,7 +29,7 @@ class LeadContactClient:
         url = f"{self.base_url}/credits"
         try:
             logger.info(f"[LeadContact] Checking remaining credits...")
-            resp = _http.get(url, headers=self.headers, timeout=15)
+            resp = requests.get(url, headers=self.headers, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
                 points = data.get("data", {}).get("remainingPoints", 0)
@@ -41,6 +41,26 @@ class LeadContactClient:
         except Exception as e:
             logger.error(f"[LeadContact] Exception in get_credits: {e}")
             return 0
+
+    def get_credit_details(self) -> Dict[str, Any]:
+        """
+        Query remaining API points with error context for admin dashboards.
+        Endpoint: GET /credits
+        """
+        url = f"{self.base_url}/credits"
+        try:
+            logger.info("[LeadContact] Checking remaining credits...")
+            resp = _http.get(url, headers=self.headers, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+            logger.error(f"[LeadContact] Credits API error {resp.status_code}: {resp.text[:300]}")
+            return {
+                "error": f"HTTP {resp.status_code}",
+                "status_code": resp.status_code,
+            }
+        except Exception as e:
+            logger.error(f"[LeadContact] Exception in get_credit_details: {e}")
+            return {"error": str(e)}
 
     def query_email_with_validation(self, linkedin_url: str) -> Dict[str, Any]:
         """

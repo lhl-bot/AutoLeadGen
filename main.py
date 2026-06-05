@@ -7,12 +7,22 @@ from fastapi.staticfiles import StaticFiles
 
 from database import engine, Base
 from routers import (
-    auth, agent, analytics, channels, client_pools,
-    email_accounts, email_logs, health, leads, personas, replies, workflows
+    auth, agent, analytics, api_usage, channels, client_pools, compliance,
+    credits, email_accounts, email_logs, health, leads, personas, replies, workflows
 )
 
-# Initialize database tables
-Base.metadata.create_all(bind=engine)
+# Initialize database tables with retries
+from sqlalchemy.exc import OperationalError
+import time
+for i in range(5):
+    try:
+        Base.metadata.create_all(bind=engine)
+        break
+    except OperationalError as e:
+        if i == 4:
+            raise e
+        print(f"⚠️ Database connection failed during startup: {e}. Retrying ({i+1}/5) in 2s...")
+        time.sleep(2)
 
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
@@ -103,8 +113,11 @@ if os.path.exists("static"):
 app.include_router(auth.router)
 app.include_router(agent.router)
 app.include_router(analytics.router)
+app.include_router(api_usage.router)
 app.include_router(channels.router)
 app.include_router(client_pools.router)
+app.include_router(compliance.router)
+app.include_router(credits.router)
 app.include_router(email_accounts.router)
 app.include_router(email_logs.router)
 app.include_router(health.router)

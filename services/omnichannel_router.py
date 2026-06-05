@@ -6,6 +6,7 @@ import httpx
 from datetime import datetime, timezone
 from database import SessionLocal, db_retry_async
 from models import Lead, Workflow, ChannelAccount, MessageLog
+from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.unipile_client import UnipileClient
 
 logger = logging.getLogger("omnichannel_router")
@@ -75,10 +76,19 @@ class OmnichannelRouter:
         logger.info(f"[OMNICHANNEL] Sending LinkedIn connect request to {lead.linkedin_url}")
         
         db = SessionLocal()
+        credit_charged = False
         try:
+            workflow = db.query(Workflow).filter(Workflow.id == lead.workflow_id).first()
+            owner_id = workflow.user_id if workflow else None
+            if not owner_id:
+                return
+
             # Find an active LinkedIn account for this user/workflow pool
-            # For simplicity, just pick the first connected LinkedIn account
-            acc = db.query(ChannelAccount).filter(ChannelAccount.account_type == "LINKEDIN", ChannelAccount.status == "OK").first()
+            acc = db.query(ChannelAccount).filter(
+                ChannelAccount.account_type == "LINKEDIN",
+                ChannelAccount.status == "OK",
+                ChannelAccount.user_id == owner_id,
+            ).first()
             if not acc:
                 logger.warning("No active LinkedIn accounts found to send connection request.")
                 return
@@ -89,6 +99,23 @@ class OmnichannelRouter:
             
             if provider_id:
                 message = "Hi, I'd love to connect and discuss potential synergies."
+                try:
+                    consume_credits(
+                        db,
+                        owner_id,
+                        "linkedin_invite",
+                        description=f"Omnichannel LinkedIn invite for lead #{lead.id}",
+                        reference_type="lead",
+                        reference_id=lead.id,
+                    )
+                    credit_charged = True
+                except InsufficientCreditsError as credit_err:
+                    logger.warning(
+                        f"LinkedIn connect skipped for lead {lead.id}: "
+                        f"insufficient credits (required={credit_err.required}, balance={credit_err.balance})"
+                    )
+                    return
+
                 success = await self.unipile.send_linkedin_invitation(
                     account_id=acc.unipile_account_id,
                     provider_id=provider_id,
@@ -113,8 +140,29 @@ class OmnichannelRouter:
                     )
                     db.add(msg_log)
                     db.commit()
+                    if not success and credit_charged:
+                        refund_credits(
+                            db,
+                            owner_id,
+                            "linkedin_invite",
+                            description=f"Refund failed omnichannel LinkedIn invite for lead #{lead.id}",
+                            reference_type="lead",
+                            reference_id=lead.id,
+                        )
+                        credit_charged = False
             else:
                 logger.warning(f"Could not resolve LinkedIn provider_id for vanity name from {lead.linkedin_url}")
+        except Exception:
+            if credit_charged:
+                refund_credits(
+                    db,
+                    owner_id,
+                    "linkedin_invite",
+                    description=f"Refund omnichannel LinkedIn error for lead #{lead.id}",
+                    reference_type="lead",
+                    reference_id=lead.id,
+                )
+            raise
         finally:
             db.close()
 
@@ -191,13 +239,40 @@ class OmnichannelRouter:
         logger.info(f"[OMNICHANNEL] Sending WhatsApp message to {lead.whatsapp_number}")
         
         db = SessionLocal()
+        credit_charged = False
         try:
-            acc = db.query(ChannelAccount).filter(ChannelAccount.account_type == "WHATSAPP", ChannelAccount.status == "OK").first()
+            workflow = db.query(Workflow).filter(Workflow.id == lead.workflow_id).first()
+            owner_id = workflow.user_id if workflow else None
+            if not owner_id:
+                return
+
+            acc = db.query(ChannelAccount).filter(
+                ChannelAccount.account_type == "WHATSAPP",
+                ChannelAccount.status == "OK",
+                ChannelAccount.user_id == owner_id,
+            ).first()
             if not acc:
                 logger.warning("No active WhatsApp accounts found.")
                 return
                 
             message_text = f"Hi {lead.first_name}, just following up on our email!"
+            try:
+                consume_credits(
+                    db,
+                    owner_id,
+                    "whatsapp_message",
+                    description=f"Omnichannel WhatsApp message for lead #{lead.id}",
+                    reference_type="lead",
+                    reference_id=lead.id,
+                )
+                credit_charged = True
+            except InsufficientCreditsError as credit_err:
+                logger.warning(
+                    f"WhatsApp skipped for lead {lead.id}: "
+                    f"insufficient credits (required={credit_err.required}, balance={credit_err.balance})"
+                )
+                return
+
             success = await self.unipile.send_whatsapp_message(
                 account_id=acc.unipile_account_id,
                 phone_number=lead.whatsapp_number,
@@ -217,6 +292,27 @@ class OmnichannelRouter:
                 )
                 db.add(msg_log)
                 db.commit()
+                if not success and credit_charged:
+                    refund_credits(
+                        db,
+                        owner_id,
+                        "whatsapp_message",
+                        description=f"Refund failed omnichannel WhatsApp message for lead #{lead.id}",
+                        reference_type="lead",
+                        reference_id=lead.id,
+                    )
+                    credit_charged = False
+        except Exception:
+            if credit_charged:
+                refund_credits(
+                    db,
+                    owner_id,
+                    "whatsapp_message",
+                    description=f"Refund omnichannel WhatsApp error for lead #{lead.id}",
+                    reference_type="lead",
+                    reference_id=lead.id,
+                )
+            raise
         finally:
             db.close()
 

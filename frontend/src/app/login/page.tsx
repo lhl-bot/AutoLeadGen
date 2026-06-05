@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Bot, Loader2, ArrowRight } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { apiUrl, getErrorMessage } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
@@ -54,45 +53,47 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 relative overflow-hidden">
-      <div className="absolute top-6 right-6 z-50">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-6">
+      <div className="absolute right-6 top-6 z-50">
         <LanguageSwitcher />
       </div>
 
-      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(99,102,241,0.12),transparent_38%),linear-gradient(180deg,rgba(15,23,42,0),rgba(15,23,42,0.96))] -z-10" />
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md"
-      >
-        <div className="glass-panel p-8 md:p-10 rounded-lg border-white/10 shadow-2xl relative overflow-hidden">
+      <div className="absolute inset-x-0 bottom-0 top-20 opacity-35" aria-hidden="true">
+        <div className="mx-auto grid h-full max-w-5xl grid-cols-3 gap-4 px-6">
+          <div className="rounded-lg border border-white/10 bg-white/[0.04]" />
+          <div className="rounded-lg border border-white/10 bg-white/[0.06]" />
+          <div className="rounded-lg border border-white/10 bg-white/[0.04]" />
+        </div>
+      </div>
+      <div className="relative z-10 w-full max-w-md">
+        <div className="relative overflow-hidden rounded-lg border border-slate-200 bg-white p-8 text-slate-950 shadow-2xl shadow-black/20 md:p-10">
           <div className="flex flex-col items-center mb-10">
-            <div className="w-12 h-12 bg-indigo-600 rounded-lg flex items-center justify-center mb-6 shadow-sm">
+            <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-slate-950 shadow-sm">
               <Bot className="w-7 h-7 text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">{t('Welcome Back')}</h1>
-            <p className="text-gray-400 text-center">{t('Sign in description')}</p>
+            <h1 className="mb-2 text-3xl font-semibold text-slate-950">{t('Welcome Back')}</h1>
+            <p className="text-center text-slate-500">{t('Sign in description')}</p>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">{t('Username')}</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t('Username')}</label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full h-12 bg-black/50 border border-white/10 rounded-lg px-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
+                className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 text-slate-950 transition-all placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
                 placeholder={t('Username')}
                 required
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">{t('Password')}</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">{t('Password')}</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full h-12 bg-black/50 border border-white/10 rounded-lg px-4 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
+                className="h-12 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 text-slate-950 transition-all placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
                 placeholder="••••••••"
                 required
               />
@@ -107,7 +108,7 @@ export default function LoginPage() {
             <Button 
               type="submit" 
               disabled={isLoading}
-              className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-base mt-8"
+              className="mt-8 h-12 w-full bg-slate-950 text-base text-white hover:bg-slate-800"
             >
               {isLoading ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
@@ -117,11 +118,12 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-8 text-center text-sm text-gray-500">
-            {t('No account')} <a href="#" className="text-indigo-400 hover:text-indigo-300 transition-colors">{t('Contact Sales')}</a>
+          <div className="mt-8 text-center text-sm text-slate-500">
+            {t('No account')}{' '}
+            <span className="font-medium text-slate-700">sales@autoleadgen.com</span>
           </div>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

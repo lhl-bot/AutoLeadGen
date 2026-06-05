@@ -142,6 +142,8 @@ export default function WorkflowsPage() {
   const [pools, setPools] = useState<ClientPool[]>([]);
   const [personas, setPersonas] = useState<CustomerPersona[]>([]);
   const [emails, setEmails] = useState<EmailAccount[]>([]);
+  const [dependenciesLoaded, setDependenciesLoaded] = useState(false);
+  const [isDependenciesLoading, setIsDependenciesLoading] = useState(false);
 
   // Workflow form state
   const [isWorkflowDialogOpen, setIsWorkflowDialogOpen] = useState(false);
@@ -182,6 +184,8 @@ export default function WorkflowsPage() {
   };
 
   const fetchDependencies = async () => {
+    if (dependenciesLoaded || isDependenciesLoading) return;
+    setIsDependenciesLoading(true);
     try {
       const [poolsRes, personasRes, emailsRes] = await Promise.all([
         apiFetch('/api/client_pools/'),
@@ -191,14 +195,16 @@ export default function WorkflowsPage() {
       if (poolsRes.ok) setPools(await poolsRes.json());
       if (personasRes.ok) setPersonas(await personasRes.json());
       if (emailsRes.ok) setEmails(await emailsRes.json());
+      setDependenciesLoaded(true);
     } catch (e) {
       console.error('Failed to fetch dependencies', e);
+    } finally {
+      setIsDependenciesLoading(false);
     }
   };
 
   useEffect(() => {
     fetchWorkflows();
-    fetchDependencies();
     // Fetch playbook presets
     apiFetch('/api/workflows/playbook-presets').then(async res => {
       if (res.ok) setPlaybookPresets(await res.json());
@@ -206,6 +212,7 @@ export default function WorkflowsPage() {
   }, []);
 
   const openCreateDialog = () => {
+    void fetchDependencies();
     setEditingWorkflowId(null);
     setFormData(getDefaultWorkflowForm());
     setShowPlaybookSelector(true);
@@ -213,6 +220,7 @@ export default function WorkflowsPage() {
   };
 
   const openEditDialog = (workflow: Workflow) => {
+    void fetchDependencies();
     setEditingWorkflowId(workflow.id);
     setFormData(workflowToForm(workflow));
     setShowPlaybookSelector(false);
@@ -459,16 +467,16 @@ export default function WorkflowsPage() {
                 <ScrollText className="w-4 h-4" /> {t('Engine Logs')}
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-4xl bg-[#0d0d0f] border border-white/10 text-white">
+            <DialogContent className="max-w-4xl border border-slate-200 bg-white text-slate-950">
               <DialogHeader>
                 <DialogTitle className="flex justify-between pr-6">
                   <span>{t('Real-time Engine Logs')}</span>
-                  <Button onClick={loadEngineLogs} variant="outline" size="sm" className="h-8 gap-2 bg-transparent border-white/20">
+                  <Button onClick={loadEngineLogs} variant="outline" size="sm" className="h-8 gap-2 border-slate-200 bg-transparent text-slate-700">
                     <RefreshCw className="w-3 h-3" /> {t('Refresh')}
                   </Button>
                 </DialogTitle>
               </DialogHeader>
-              <div className="mt-4 p-4 rounded-lg bg-black font-mono text-sm text-gray-400 h-[60vh] overflow-y-auto whitespace-pre-wrap">
+              <div className="mt-4 h-[60vh] overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-4 font-mono text-sm text-slate-300">
                 {isLogsLoading ? t('Loading...') : engineLogs}
               </div>
             </DialogContent>
@@ -680,7 +688,7 @@ export default function WorkflowsPage() {
                   </div>
                   <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
-                    {t('Auto Follow-up')} ({t('AI drafts sent automatically')})
+                    {t('Auto Follow-up')} ({t('AI drafts follow-ups for review')})
                   </label>
                 </div>
 
@@ -767,10 +775,10 @@ export default function WorkflowsPage() {
                       </span>
                     )}
                     {(() => {
-                      const persona = personas.find(p => p.id === wf.persona_id);
-                      return persona ? (
+                      const personaName = wf.persona_name || personas.find(p => p.id === wf.persona_id)?.name;
+                      return personaName ? (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/10 text-purple-400">
-                          <User className="h-3.5 w-3.5" /> {t('Customer Personas')}: {persona.name}
+                          <User className="h-3.5 w-3.5" /> {t('Customer Personas')}: {personaName}
                         </span>
                       ) : null;
                     })()}

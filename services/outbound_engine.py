@@ -8,14 +8,16 @@ import socket
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from database import SessionLocal, db_retry, db_retry_async
-from models import Workflow, Lead, EmailLog, WorkflowEmail, ProcessedDomain
+from models import Workflow, Lead, EmailLog, WorkflowEmail, ProcessedDomain, EmailAccount
 from services.search_engine import is_domain_quality_candidate, search_domain_results
 from services.snovio_client import SnovioClient
 from services.ai_writer import generate_email
 from services.research_agent import build_and_save_lead_brief
 from services.email_sender import send_email
 from services.auth import decrypt_smtp_pass
+from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.lead_scoring import apply_lead_score, build_outreach_context
+from services.suppression import generate_unsubscribe_token, owner_id_for_lead, suppression_reason
 
 # ─── Global Snovio Client ───
 import os
@@ -65,6 +67,24 @@ def _bool_env(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.lower() not in {"0", "false", "no", "off"}
+
+
+def _public_base_url() -> Optional[str]:
+    for name in ("PUBLIC_APP_URL", "FRONTEND_BASE_URL", "APP_BASE_URL"):
+        value = os.environ.get(name, "").strip().rstrip("/")
+        if value:
+            return value
+    return None
+
+
+def _unsubscribe_url_for_lead(lead: Lead) -> Optional[str]:
+    if not lead.id or not lead.email:
+        return None
+    base_url = _public_base_url()
+    if not base_url:
+        return None
+    token = generate_unsubscribe_token(lead.id, lead.email)
+    return f"{base_url}/api/unsubscribe/{token}"
 
 
 def _get_workflow_search_lock(wf_id: int) -> threading.Lock:
@@ -252,7 +272,14 @@ def _domain_has_mx(domain: str) -> bool:
     return ok
 
 
-def _validate_lead_before_send(lead: Lead) -> Optional[str]:
+def _validate_lead_before_send(lead: Lead, db=None) -> Optional[str]:
+    if lead.status in {"unsubscribed", "rejected"}:
+        return f"lead_status_{lead.status}"
+    if db is not None:
+        owner_id = owner_id_for_lead(db, lead)
+        reason = suppression_reason(db, email=lead.email, domain=lead.domain, user_id=owner_id)
+        if reason:
+            return reason
     if not lead.email:
         return "missing_email"
     email = lead.email.strip().lower()
@@ -304,6 +331,10 @@ def _mark_lead_suppressed(lead: Lead, reason: str, db) -> None:
         lead.status = "low_score"
     elif reason and reason.startswith("email_not_verified"):
         lead.status = "needs_email"  # Can re-verify later
+    elif reason and reason.startswith("suppressed:"):
+        lead.status = "unsubscribed"
+    elif reason in {"lead_status_unsubscribed", "lead_status_rejected"}:
+        lead.status = reason.replace("lead_status_", "")
     else:
         lead.status = "invalid_email"
     lead.reply_snippet = f"Suppressed before sending: {reason}"
@@ -474,6 +505,7 @@ async def process_workflow(wf_id: int):
             wf_auto_followup = wf.auto_followup
             wf_max_followups = wf.max_followups or 3
             wf_name = wf.name
+            wf_user_id = wf.user_id
             wf_ai_prompt = wf.ai_prompt or "Introduce our company and ask for a quick meeting."
         finally:
             db.close()
@@ -497,7 +529,10 @@ async def process_workflow(wf_id: int):
         db = SessionLocal()
         try:
             drafted_leads = []
-            if not email_limit_reached:
+            auto_send_drafts = _bool_env("OUTBOUND_AUTO_SEND_DRAFTS", False)
+            if not auto_send_drafts:
+                logger.info(f"Workflow #{wf_id} '{wf_name}' is in review mode; drafted emails will not auto-send.")
+            if auto_send_drafts and not email_limit_reached:
                 q = db.query(Lead).filter(
                     Lead.workflow_id == wf_id,
                     Lead.status == "drafted"
@@ -606,6 +641,7 @@ async def process_workflow(wf_id: int):
         
         if lead_infos:
             async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name, linkedin_url, whatsapp_number):
+                credit_charged = False
                 try:
                     # 0. Try LeadContact email enrichment if no email or unverified
                     has_usable_email = bool(email and email.strip())
@@ -734,6 +770,27 @@ async def process_workflow(wf_id: int):
                     if outreach_context:
                         enriched_prompt = f"{wf_ai_prompt}\n\nAI LEAD QUALIFICATION CONTEXT:\n{outreach_context}"
                     
+                    db_credit = SessionLocal()
+                    try:
+                        consume_credits(
+                            db_credit,
+                            wf_user_id,
+                            "ai_email_draft",
+                            description=f"AI email draft for lead #{lead_id}",
+                            reference_type="lead",
+                            reference_id=lead_id,
+                            metadata={"workflow_id": wf_id, "workflow_name": wf_name},
+                        )
+                        credit_charged = True
+                    except InsufficientCreditsError as credit_err:
+                        logger.warning(
+                            f"Skipping AI draft for lead {lead_id}: insufficient credits "
+                            f"(required={credit_err.required}, balance={credit_err.balance})"
+                        )
+                        return
+                    finally:
+                        db_credit.close()
+
                     db_shot = SessionLocal()
                     try:
                         draft = await asyncio.to_thread(
@@ -760,7 +817,34 @@ async def process_workflow(wf_id: int):
                                 logger.info(f"Drafted email for {email} (workflow: {wf_name})")
                         finally:
                             db2.close()
+                    elif credit_charged:
+                        db_refund = SessionLocal()
+                        try:
+                            refund_credits(
+                                db_refund,
+                                wf_user_id,
+                                "ai_email_draft",
+                                description=f"Refund empty AI email draft for lead #{lead_id}",
+                                reference_type="lead",
+                                reference_id=lead_id,
+                            )
+                            credit_charged = False
+                        finally:
+                            db_refund.close()
                 except Exception as e:
+                    if credit_charged:
+                        db_refund = SessionLocal()
+                        try:
+                            refund_credits(
+                                db_refund,
+                                wf_user_id,
+                                "ai_email_draft",
+                                description=f"Refund failed AI email draft for lead #{lead_id}",
+                                reference_type="lead",
+                                reference_id=lead_id,
+                            )
+                        finally:
+                            db_refund.close()
                     logger.error(f"Error drafting for {email}: {e}")
 
             # Run all draft tasks concurrently
@@ -782,6 +866,7 @@ async def process_workflow(wf_id: int):
                 db.close()
             
             for lead_id, email, first_name, company_name, reply_snippet, last_reply_at, current_followup_count in replied_infos:
+                credit_charged = False
                 if last_reply_at:
                     hours_since_reply = (datetime.now(timezone.utc) - last_reply_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
                     if hours_since_reply < 24:
@@ -820,6 +905,24 @@ async def process_workflow(wf_id: int):
                                 })
                             
                             followup_round = current_followup_count + 1
+
+                            try:
+                                consume_credits(
+                                    db2,
+                                    wf_user_id,
+                                    "ai_email_draft",
+                                    description=f"AI follow-up draft for lead #{lead_id}",
+                                    reference_type="lead",
+                                    reference_id=lead_id,
+                                    metadata={"workflow_id": wf_id, "workflow_name": wf_name},
+                                )
+                                credit_charged = True
+                            except InsufficientCreditsError as credit_err:
+                                logger.warning(
+                                    f"Skipping follow-up draft for lead {lead_id}: insufficient credits "
+                                    f"(required={credit_err.required}, balance={credit_err.balance})"
+                                )
+                                continue
                             
                             followup_draft = await asyncio.to_thread(
                                 draft_followup_email,
@@ -836,9 +939,32 @@ async def process_workflow(wf_id: int):
                                 db2.commit()
                                 logger.info(f"Auto-followup drafted for {email} (round #{followup_round}, strategy: {'value' if followup_round==1 else 'social_proof' if followup_round==2 else 'urgency'})")
                                 return
+                            elif credit_charged:
+                                refund_credits(
+                                    db2,
+                                    wf_user_id,
+                                    "ai_email_draft",
+                                    description=f"Refund empty AI follow-up draft for lead #{lead_id}",
+                                    reference_type="lead",
+                                    reference_id=lead_id,
+                                )
+                                credit_charged = False
                     finally:
                         db2.close()
                 except Exception as e:
+                    if credit_charged:
+                        db_refund = SessionLocal()
+                        try:
+                            refund_credits(
+                                db_refund,
+                                wf_user_id,
+                                "ai_email_draft",
+                                description=f"Refund failed AI follow-up draft for lead #{lead_id}",
+                                reference_type="lead",
+                                reference_id=lead_id,
+                            )
+                        finally:
+                            db_refund.close()
                     logger.error(f"Followup error for {email}: {e}")
 
         # 4.7 Stage: Auto-Followup for non-replied leads (Cold Drip sequence)
@@ -859,6 +985,7 @@ async def process_workflow(wf_id: int):
                 db.close()
 
             for lead_id, email, first_name, company_name, current_followup_count in cold_infos:
+                credit_charged = False
                 try:
                     db2 = SessionLocal()
                     try:
@@ -896,6 +1023,24 @@ async def process_workflow(wf_id: int):
                             followup_round = current_followup_count + 1
 
                             from services.followup_engine import draft_cold_followup_email
+                            try:
+                                consume_credits(
+                                    db2,
+                                    wf_user_id,
+                                    "ai_email_draft",
+                                    description=f"AI cold follow-up draft for lead #{lead_id}",
+                                    reference_type="lead",
+                                    reference_id=lead_id,
+                                    metadata={"workflow_id": wf_id, "workflow_name": wf_name},
+                                )
+                                credit_charged = True
+                            except InsufficientCreditsError as credit_err:
+                                logger.warning(
+                                    f"Skipping cold follow-up draft for lead {lead_id}: insufficient credits "
+                                    f"(required={credit_err.required}, balance={credit_err.balance})"
+                                )
+                                continue
+
                             followup_draft = await asyncio.to_thread(
                                 draft_cold_followup_email,
                                 lead_data={"first_name": first_name, "company_name": company_name},
@@ -910,9 +1055,32 @@ async def process_workflow(wf_id: int):
                                 lead_obj.followup_count += 1
                                 db2.commit()
                                 logger.info(f"Cold follow-up #{followup_round} drafted for {email} (workflow: {wf_name})")
+                            elif credit_charged:
+                                refund_credits(
+                                    db2,
+                                    wf_user_id,
+                                    "ai_email_draft",
+                                    description=f"Refund empty AI cold follow-up draft for lead #{lead_id}",
+                                    reference_type="lead",
+                                    reference_id=lead_id,
+                                )
+                                credit_charged = False
                     finally:
                         db2.close()
                 except Exception as e:
+                    if credit_charged:
+                        db_refund = SessionLocal()
+                        try:
+                            refund_credits(
+                                db_refund,
+                                wf_user_id,
+                                "ai_email_draft",
+                                description=f"Refund failed AI cold follow-up draft for lead #{lead_id}",
+                                reference_type="lead",
+                                reference_id=lead_id,
+                            )
+                        finally:
+                            db_refund.close()
                     logger.error(f"Cold followup error for lead {lead_id}: {e}")
 
         # 5. Stage: Searching for new leads. This is independently switchable
@@ -1535,9 +1703,9 @@ def _apollo_search_and_extract(wf_id: int, api_key: str, batch_lead_limit: Optio
 
 def _is_lead_sendable_now(lead: Lead, db) -> tuple:
     from typing import Tuple, Optional
-    suppression_reason = _validate_lead_before_send(lead)
-    if suppression_reason:
-        return False, suppression_reason
+    preflight_reason = _validate_lead_before_send(lead, db)
+    if preflight_reason:
+        return False, preflight_reason
 
     # ── Fit-score gate: skip low-quality leads ──
     min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
@@ -1574,17 +1742,19 @@ def _is_lead_sendable_now(lead: Lead, db) -> tuple:
 
     return True, None
 
-async def send_lead_email(lead: Lead, wf: Workflow, db):
+async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool = True, raise_on_credit_error: bool = False):
+    credit_charged = False
+    sent_successfully = False
     try:
         bounce_pause_reason = _workflow_bounce_pause_reason(wf.id, db)
         if bounce_pause_reason:
             logger.warning(f"Email sending paused for workflow '{wf.name}': {bounce_pause_reason}")
             return
 
-        suppression_reason = _validate_lead_before_send(lead)
-        if suppression_reason:
-            _mark_lead_suppressed(lead, suppression_reason, db)
-            logger.warning(f"Suppressed email to {lead.email or lead.domain}: {suppression_reason}")
+        preflight_reason = _validate_lead_before_send(lead, db)
+        if preflight_reason:
+            _mark_lead_suppressed(lead, preflight_reason, db)
+            logger.warning(f"Suppressed email to {lead.email or lead.domain}: {preflight_reason}")
             return
 
         # Timezone-aware sending: only send during recipient's working hours (9-17)
@@ -1614,7 +1784,10 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
                 logger.info(f"Skipping {lead.email}: domain {lead.domain} already contacted in last {domain_cooldown_hours}h")
                 return
 
-        workflow_emails = db.query(WorkflowEmail).filter(WorkflowEmail.workflow_id == wf.id).all()
+        workflow_emails = db.query(WorkflowEmail).join(WorkflowEmail.email_account).filter(
+            WorkflowEmail.workflow_id == wf.id,
+            EmailAccount.user_id == wf.user_id,
+        ).all()
         if not workflow_emails:
             return
             
@@ -1711,7 +1884,8 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
 
         # Wrap in branded HTML template
         custom_sig = wf.email_signature if hasattr(wf, 'email_signature') and wf.email_signature else None
-        body_html = _build_email_html(body, account_to_use.display_name or account_to_use.email, custom_sig)
+        unsubscribe_url = _unsubscribe_url_for_lead(lead)
+        body_html = _build_email_html(body, account_to_use.display_name or account_to_use.email, custom_sig, unsubscribe_url)
 
         in_reply_to = None
         if lead.followup_count > 0:
@@ -1721,6 +1895,18 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
             ).order_by(EmailLog.sent_at.desc()).first()
             if last_outbound:
                 in_reply_to = last_outbound.message_id
+
+        if charge_credits:
+            consume_credits(
+                db,
+                wf.user_id,
+                "email_send",
+                description=f"Outbound email send to {lead.email}",
+                reference_type="lead",
+                reference_id=lead.id,
+                metadata={"workflow_id": wf.id, "workflow_name": wf.name},
+            )
+            credit_charged = True
 
         res = await asyncio.to_thread(
             send_email,
@@ -1738,10 +1924,12 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
             sender_name=account_to_use.display_name or account_to_use.email.split('@')[0],
             reply_to=account_to_use.email,
             in_reply_to=in_reply_to,
-            references=in_reply_to
+            references=in_reply_to,
+            list_unsubscribe_url=unsubscribe_url
         )
         
         if res.get("success"):
+            sent_successfully = True
             lead.status = "sent"
             lead.send_fail_count = 0
             db_log = EmailLog(
@@ -1757,6 +1945,16 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
             db.commit()
             logger.info(f"✉ Sent to {lead.email} via {account_to_use.email}")
         else:
+            if credit_charged:
+                refund_credits(
+                    db,
+                    wf.user_id,
+                    "email_send",
+                    description=f"Refund failed outbound email send to {lead.email}",
+                    reference_type="lead",
+                    reference_id=lead.id,
+                )
+                credit_charged = False
             lead.send_fail_count = (lead.send_fail_count or 0) + 1
             if lead.send_fail_count >= 3:
                 lead.status = "send_failed"
@@ -1764,12 +1962,35 @@ async def send_lead_email(lead: Lead, wf: Workflow, db):
             else:
                 logger.warning(f"Send failed to {lead.email} (attempt {lead.send_fail_count}/3): {res.get('message')}")
             db.commit()
-            
+    except InsufficientCreditsError as e:
+        logger.warning(
+            f"Insufficient credits for workflow '{wf.name}' user #{wf.user_id}: "
+            f"required={e.required}, balance={e.balance}"
+        )
+        try:
+            lead.reply_snippet = f"Insufficient credits for outbound send: required {e.required}, balance {e.balance}"
+            db.commit()
+        except Exception:
+            db.rollback()
+        if raise_on_credit_error:
+            raise
     except Exception as e:
+        if credit_charged and not sent_successfully:
+            try:
+                refund_credits(
+                    db,
+                    wf.user_id,
+                    "email_send",
+                    description=f"Refund failed outbound email send to {lead.email}",
+                    reference_type="lead",
+                    reference_id=lead.id,
+                )
+            except Exception as refund_err:
+                logger.error(f"Credit refund failed for lead {lead.id}: {refund_err}")
         logger.error(f"Send stage error for {lead.email}: {e}")
 
 
-def _build_email_html(body_text: str, sender_name: str, custom_signature: str = None) -> str:
+def _build_email_html(body_text: str, sender_name: str, custom_signature: str = None, unsubscribe_url: Optional[str] = None) -> str:
     """Wrap plain text body in a clean, professional HTML email template."""
     body_paragraphs = ""
     for para in body_text.strip().split("\n\n"):
@@ -1788,6 +2009,10 @@ def _build_email_html(body_text: str, sender_name: str, custom_signature: str = 
     else:
         signature_block = f"<p style='margin:0;'>Best regards,<br><strong style='color:#555;'>{sender_name}</strong></p>"
 
+    unsubscribe_copy = "If you no longer wish to receive these emails, please reply with \"unsubscribe\"."
+    if unsubscribe_url:
+        unsubscribe_copy = f'If you no longer wish to receive these emails, <a href="{unsubscribe_url}" style="color:#94a3b8;">unsubscribe here</a>.'
+
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
@@ -1800,7 +2025,7 @@ def _build_email_html(body_text: str, sender_name: str, custom_signature: str = 
 </td></tr>
 <tr><td style="padding:16px 40px 24px;border-top:1px solid #eee;font-size:13px;color:#999;">
 {signature_block}
-<p style="margin:8px 0 0;font-size:11px;color:#bbb;">If you no longer wish to receive these emails, please reply with "unsubscribe".</p>
+<p style="margin:8px 0 0;font-size:11px;color:#bbb;">{unsubscribe_copy}</p>
 </td></tr>
 </table>
 </td></tr>
@@ -1832,17 +2057,22 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
     finally:
         db.close()
 
-    # 1. Find a connected LinkedIn account
+    # 1. Find a connected LinkedIn account owned by the workflow owner
     db = SessionLocal()
     try:
+        workflow = db.query(Workflow).filter(Workflow.id == wf_id).first()
+        if not workflow:
+            return
         linkedin_account = db.query(ChannelAccount).filter(
             ChannelAccount.account_type == "LINKEDIN",
-            ChannelAccount.status == "OK"
+            ChannelAccount.status == "OK",
+            ChannelAccount.user_id == workflow.user_id,
         ).first()
         if not linkedin_account:
             logger.warning(f"LinkedIn is enabled for workflow '{wf_name}', but no connected LinkedIn account is available")
             return
         account_id = linkedin_account.unipile_account_id
+        wf_user_id = workflow.user_id
     finally:
         db.close()
 
@@ -1874,7 +2104,7 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
             Lead.linkedin_sent == False,
             Lead.linkedin_status.in_(["unconnected", None])
         ).limit(3).all()
-        lead_data = [(l.id, l.linkedin_url, l.first_name, l.last_name, l.company_name, l.job_title, l.domain) for l in candidates]
+        lead_data = [(l.id, l.linkedin_url, l.first_name, l.last_name, l.company_name, l.job_title, l.domain, l.email) for l in candidates]
     finally:
         db.close()
 
@@ -1883,8 +2113,23 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
 
     client = UnipileClient()
 
-    for lead_id, linkedin_url, first_name, last_name, company_name, job_title, domain in lead_data:
+    for lead_id, linkedin_url, first_name, last_name, company_name, job_title, domain, email in lead_data:
+        credit_charged = False
         try:
+            db = SessionLocal()
+            try:
+                reason = suppression_reason(db, email=email, domain=domain, user_id=wf_user_id)
+                if reason:
+                    lead_obj = db.query(Lead).filter(Lead.id == lead_id).first()
+                    if lead_obj:
+                        lead_obj.linkedin_status = "suppressed"
+                        lead_obj.reply_snippet = f"Suppressed before LinkedIn send: {reason}"
+                        db.commit()
+                    logger.info(f"Suppressed LinkedIn invite for lead {lead_id}: {reason}")
+                    continue
+            finally:
+                db.close()
+
             # Get brief for personalization
             brief_summary = "No detailed brief available."
             db = SessionLocal()
@@ -1927,6 +2172,28 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
                     db.close()
                 continue
 
+            # Reserve credits before the provider call; refund below when provider does not send.
+            db = SessionLocal()
+            try:
+                consume_credits(
+                    db,
+                    wf_user_id,
+                    "linkedin_invite",
+                    description=f"Auto LinkedIn invite for lead #{lead_id}",
+                    reference_type="lead",
+                    reference_id=lead_id,
+                    metadata={"workflow_id": wf_id, "workflow_name": wf_name},
+                )
+                credit_charged = True
+            except InsufficientCreditsError as credit_err:
+                logger.warning(
+                    f"LinkedIn invite skipped for workflow '{wf_name}': "
+                    f"insufficient credits (required={credit_err.required}, balance={credit_err.balance})"
+                )
+                break
+            finally:
+                db.close()
+
             # Send invitation
             success = await client.send_linkedin_invitation(account_id, provider_id, invite_msg)
             provider_limited = (
@@ -1938,6 +2205,20 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
             )
 
             if provider_limited:
+                if credit_charged:
+                    db = SessionLocal()
+                    try:
+                        refund_credits(
+                            db,
+                            wf_user_id,
+                            "linkedin_invite",
+                            description=f"Refund provider-limited LinkedIn invite for lead #{lead_id}",
+                            reference_type="lead",
+                            reference_id=lead_id,
+                        )
+                        credit_charged = False
+                    finally:
+                        db.close()
                 _linkedin_cooldown_until = time.time() + cooldown
                 db = SessionLocal()
                 try:
@@ -1987,6 +2268,16 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
                 if success:
                     logger.info(f"💼 LinkedIn invite sent to {first_name} {last_name} ({linkedin_url}) [workflow: {wf_name}]")
                 else:
+                    if credit_charged:
+                        refund_credits(
+                            db,
+                            wf_user_id,
+                            "linkedin_invite",
+                            description=f"Refund failed LinkedIn invite for lead #{lead_id}",
+                            reference_type="lead",
+                            reference_id=lead_id,
+                        )
+                        credit_charged = False
                     logger.warning(f"💼 LinkedIn invite FAILED for {linkedin_url} [workflow: {wf_name}]")
             finally:
                 db.close()
@@ -1995,6 +2286,19 @@ async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: st
             await asyncio.sleep(random.randint(30, 90))
 
         except Exception as e:
+            if credit_charged:
+                db = SessionLocal()
+                try:
+                    refund_credits(
+                        db,
+                        wf_user_id,
+                        "linkedin_invite",
+                        description=f"Refund LinkedIn invite error for lead #{lead_id}",
+                        reference_type="lead",
+                        reference_id=lead_id,
+                    )
+                finally:
+                    db.close()
             logger.error(f"LinkedIn send error for lead {lead_id}: {e}")
 
 
@@ -2004,16 +2308,21 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
     from services.unipile_client import UnipileClient
     from services.ai_writer import generate_whatsapp_message
 
-    # 1. Find a connected WhatsApp account
+    # 1. Find a connected WhatsApp account owned by the workflow owner
     db = SessionLocal()
     try:
+        workflow = db.query(Workflow).filter(Workflow.id == wf_id).first()
+        if not workflow:
+            return
         wa_account = db.query(ChannelAccount).filter(
             ChannelAccount.account_type == "WHATSAPP",
-            ChannelAccount.status == "OK"
+            ChannelAccount.status == "OK",
+            ChannelAccount.user_id == workflow.user_id,
         ).first()
         if not wa_account:
             return
         account_id = wa_account.unipile_account_id
+        wf_user_id = workflow.user_id
     finally:
         db.close()
 
@@ -2027,7 +2336,7 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
             Lead.whatsapp_number != "",
             Lead.whatsapp_sent == False
         ).limit(3).all()
-        lead_data = [(l.id, l.whatsapp_number, l.first_name, l.company_name, l.domain) for l in candidates]
+        lead_data = [(l.id, l.whatsapp_number, l.first_name, l.company_name, l.domain, l.email) for l in candidates]
     finally:
         db.close()
 
@@ -2036,8 +2345,22 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
 
     client = UnipileClient()
 
-    for lead_id, phone, first_name, company_name, domain in lead_data:
+    for lead_id, phone, first_name, company_name, domain, email in lead_data:
+        credit_charged = False
         try:
+            db = SessionLocal()
+            try:
+                reason = suppression_reason(db, email=email, domain=domain, user_id=wf_user_id)
+                if reason:
+                    lead_obj = db.query(Lead).filter(Lead.id == lead_id).first()
+                    if lead_obj:
+                        lead_obj.reply_snippet = f"Suppressed before WhatsApp send: {reason}"
+                        db.commit()
+                    logger.info(f"Suppressed WhatsApp message for lead {lead_id}: {reason}")
+                    continue
+            finally:
+                db.close()
+
             # Get brief
             brief_summary = "No detailed brief available."
             db = SessionLocal()
@@ -2060,6 +2383,28 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
             if not wa_msg:
                 logger.warning(f"AI failed to generate WhatsApp message for lead {lead_id}")
                 continue
+
+            # Reserve credits before the provider call; refund below when provider does not send.
+            db = SessionLocal()
+            try:
+                consume_credits(
+                    db,
+                    wf_user_id,
+                    "whatsapp_message",
+                    description=f"Auto WhatsApp message for lead #{lead_id}",
+                    reference_type="lead",
+                    reference_id=lead_id,
+                    metadata={"workflow_id": wf_id, "workflow_name": wf_name},
+                )
+                credit_charged = True
+            except InsufficientCreditsError as credit_err:
+                logger.warning(
+                    f"WhatsApp message skipped for workflow '{wf_name}': "
+                    f"insufficient credits (required={credit_err.required}, balance={credit_err.balance})"
+                )
+                break
+            finally:
+                db.close()
 
             # Send
             success = await client.send_whatsapp_message(account_id, phone, wa_msg)
@@ -2084,6 +2429,16 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
                 if success:
                     logger.info(f"💬 WhatsApp sent to {first_name} ({phone}) [workflow: {wf_name}]")
                 else:
+                    if credit_charged:
+                        refund_credits(
+                            db,
+                            wf_user_id,
+                            "whatsapp_message",
+                            description=f"Refund failed WhatsApp message for lead #{lead_id}",
+                            reference_type="lead",
+                            reference_id=lead_id,
+                        )
+                        credit_charged = False
                     logger.warning(f"💬 WhatsApp FAILED for {phone} [workflow: {wf_name}]")
             finally:
                 db.close()
@@ -2091,4 +2446,17 @@ async def _send_whatsapp_messages(wf_id: int, wf_name: str, whatsapp_template: s
             await asyncio.sleep(random.randint(20, 60))
 
         except Exception as e:
+            if credit_charged:
+                db = SessionLocal()
+                try:
+                    refund_credits(
+                        db,
+                        wf_user_id,
+                        "whatsapp_message",
+                        description=f"Refund WhatsApp error for lead #{lead_id}",
+                        reference_type="lead",
+                        reference_id=lead_id,
+                    )
+                finally:
+                    db.close()
             logger.error(f"WhatsApp send error for lead {lead_id}: {e}")

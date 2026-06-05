@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { MessageSquare, RefreshCw, Reply, Send, UserCircle, Loader2 } from 'lucide-react';
-import { cn, apiFetch } from '@/lib/utils';
+import { cn, apiFetch, formatApiDetail } from '@/lib/utils';
 import type { ReplyLead } from '@/lib/types';
 import { Badge } from '@/components/ui/badge';
 import { useTranslation } from '@/lib/i18n';
@@ -54,7 +54,7 @@ export default function RepliesPage() {
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.detail || 'Failed to generate AI response');
+        toast.error(formatApiDetail(err.detail, 'Failed to generate AI response'));
       }
     } catch (e) {
       console.error(e);
@@ -87,7 +87,7 @@ export default function RepliesPage() {
         fetchReplies();
       } else {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.detail || 'Failed to send reply');
+        toast.error(formatApiDetail(err.detail, 'Failed to send reply'));
       }
     } catch (e) {
       console.error(e);

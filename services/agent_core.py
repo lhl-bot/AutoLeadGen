@@ -606,6 +606,12 @@ User's original request: {user_msg}"""
         to_email = intent_data.get("recipient_email", "")
         if not to_email or "@" not in to_email:
             return {"role": "assistant", "content": "❌ 请提供有效的收件人邮箱地址。例如：「发送邮件到 john@example.com」"}
+
+        if os.environ.get("AGENT_ALLOW_DIRECT_SEND", "").lower() not in {"1", "true", "yes", "on"}:
+            return {
+                "role": "assistant",
+                "content": "## 已生成草稿，等待人工确认\n\n为避免误发，AI 助手的直接发信默认关闭。请在客户池或回复页面审核草稿后再发送；如确需开启，设置 `AGENT_ALLOW_DIRECT_SEND=true`。"
+            }
         
         # Try to get the last email draft from conversation history
         last_draft = ""
@@ -640,26 +646,75 @@ User's original request: {user_msg}"""
             from database import SessionLocal
             from models import EmailAccount as EmailAccountModel
             from .email_sender import send_email as _send_email
+            from .auth import decrypt_smtp_pass
+            from .credits import InsufficientCreditsError, consume_credits, refund_credits
+            from .suppression import suppression_reason
             
             db = SessionLocal()
+            credit_charged = False
             try:
-                account = db.query(EmailAccountModel).first()
+                suppressed = suppression_reason(db, email=to_email, user_id=user_id)
+                if suppressed:
+                    return {"role": "assistant", "content": f"## ❌ 发送已拦截\n\n该收件人已在不联系列表中：{suppressed}"}
+
+                account = db.query(EmailAccountModel).filter(EmailAccountModel.user_id == user_id).first()
                 if not account:
                     return {"role": "assistant", "content": "## ❌ 发送失败\n\n请先在侧边栏配置发件邮箱 (SMTP)。"}
+
+                try:
+                    consume_credits(
+                        db,
+                        user_id,
+                        "email_send",
+                        description=f"AI agent direct email send to {to_email}",
+                        reference_type="agent",
+                        metadata={"recipient": to_email},
+                    )
+                    credit_charged = True
+                except InsufficientCreditsError as credit_err:
+                    return {
+                        "role": "assistant",
+                        "content": (
+                            "## ❌ 积分不足\n\n"
+                            f"本次发送需要 {credit_err.required} 积分，当前余额 {credit_err.balance}。"
+                        ),
+                    }
                 
-                result = _send_email(
-                    smtp_host=account.smtp_host,
-                    smtp_port=account.smtp_port,
-                    smtp_user=account.smtp_user,
-                    smtp_pass=account.smtp_pass,
-                    use_ssl=account.use_ssl,
-                    use_tls=account.use_tls,
-                    from_email=account.email,
-                    to_email=to_email,
-                    subject=subject,
-                    body_html=body_html,
-                    body_text=body
-                )
+                try:
+                    result = _send_email(
+                        smtp_host=account.smtp_host,
+                        smtp_port=account.smtp_port,
+                        smtp_user=account.smtp_user,
+                        smtp_pass=decrypt_smtp_pass(account.smtp_pass),
+                        use_ssl=account.use_ssl,
+                        use_tls=account.use_tls,
+                        from_email=account.email,
+                        to_email=to_email,
+                        subject=subject,
+                        body_html=body_html,
+                        body_text=body
+                    )
+                except Exception:
+                    if credit_charged:
+                        refund_credits(
+                            db,
+                            user_id,
+                            "email_send",
+                            description=f"Refund failed AI agent direct email send to {to_email}",
+                            reference_type="agent",
+                            metadata={"recipient": to_email},
+                        )
+                    raise
+                if not result.get("success") and credit_charged:
+                    refund_credits(
+                        db,
+                        user_id,
+                        "email_send",
+                        description=f"Refund failed AI agent direct email send to {to_email}",
+                        reference_type="agent",
+                        metadata={"recipient": to_email},
+                    )
+                    credit_charged = False
             finally:
                 db.close()
             

@@ -21,7 +21,8 @@ def send_email(
     sender_name: Optional[str] = None,
     reply_to: Optional[str] = None,
     in_reply_to: Optional[str] = None,
-    references: Optional[str] = None
+    references: Optional[str] = None,
+    list_unsubscribe_url: Optional[str] = None
 ) -> dict:
     """Send an email via SMTP. Returns status dict."""
     try:
@@ -38,9 +39,15 @@ def send_email(
         msg["Subject"] = subject
         msg["Date"] = formatdate(localtime=True)
         
+        unsubscribe_targets = []
         if reply_to:
             msg["Reply-To"] = reply_to
-            msg["List-Unsubscribe"] = f"<mailto:{reply_to}?subject=unsubscribe>"
+            unsubscribe_targets.append(f"<mailto:{reply_to}?subject=unsubscribe>")
+        if list_unsubscribe_url:
+            unsubscribe_targets.append(f"<{list_unsubscribe_url}>")
+            msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+        if unsubscribe_targets:
+            msg["List-Unsubscribe"] = ", ".join(unsubscribe_targets)
         
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to

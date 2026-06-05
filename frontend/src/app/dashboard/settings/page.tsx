@@ -3,29 +3,57 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, AlertCircle, RefreshCw, Key, Mail, MessageSquare } from 'lucide-react';
-import { apiFetch } from '@/lib/utils';
+import { CheckCircle2, AlertCircle, RefreshCw, Key, Mail, MessageSquare, ExternalLink, Trash2 } from 'lucide-react';
+import { apiFetch, isAbortError } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import { toast } from 'sonner';
 import type { ChannelAccount } from '@/lib/types';
+import ConfirmDialog from '@/components/ConfirmDialog';
+
+type ChannelProvider = 'LINKEDIN' | 'WHATSAPP';
 
 export default function SettingsPage() {
   const { t } = useTranslation();
   const [accounts, setAccounts] = useState<ChannelAccount[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
+  const [connectingKey, setConnectingKey] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ChannelAccount | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const fetchAccounts = async () => {
+  const fetchAccounts = async ({ sync = false }: { sync?: boolean } = {}) => {
     setIsLoading(true);
+    setIsSyncing(sync);
+    setFetchError(false);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await apiFetch('/api/channels/accounts');
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => {
+        controller.abort(new DOMException('Channel account sync timed out', 'TimeoutError'));
+      }, 10000);
+      const res = await apiFetch(`/api/channels/accounts${sync ? '?sync=true' : ''}`, { signal: controller.signal });
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
       if (res.ok) {
         const data = await res.json();
         setAccounts(data);
+      } else {
+        setFetchError(true);
       }
     } catch (e) {
-      console.error(e);
+      if (!isAbortError(e)) {
+        console.error(e);
+      }
+      setFetchError(true);
     } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       setIsLoading(false);
+      setIsSyncing(false);
     }
   };
 
@@ -33,16 +61,31 @@ export default function SettingsPage() {
     fetchAccounts();
   }, []);
 
-  const connectChannel = async (type: string) => {
+  const normaliseProvider = (type: string): ChannelProvider | null => {
+    const upper = type.toUpperCase();
+    if (upper === 'LINKEDIN' || upper === 'WHATSAPP') {
+      return upper;
+    }
+    return null;
+  };
+
+  const connectChannel = async (type: string, name?: string | null, key = type) => {
+    const provider = normaliseProvider(type);
+    if (!provider) {
+      toast.error(`${t('Connection failed')}: ${type}`);
+      return;
+    }
+    setConnectingKey(key);
     try {
       const res = await apiFetch('/api/channels/auth-link', {
         method: 'POST',
-        body: JSON.stringify({ type, name: `${type} Account` })
+        body: JSON.stringify({ type: provider, name: name || `${provider} Account` })
       });
       if (res.ok) {
         const data = await res.json();
         if (data && data.url) {
-          window.location.href = data.url;
+          toast.success(t('Connection initiated'));
+          window.location.assign(data.url);
         } else {
           toast.error(t('Connection failed'));
         }
@@ -54,6 +97,31 @@ export default function SettingsPage() {
       console.error(e);
       const message = e instanceof Error ? e.message : String(e);
       toast.error(`${t('Network error')}: ${message}`);
+    } finally {
+      setConnectingKey(null);
+    }
+  };
+
+  const deleteChannelAccount = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      const res = await apiFetch(`/api/channels/accounts/${deleteTarget.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      setAccounts(prev => prev.filter(account => account.id !== deleteTarget.id));
+      toast.success(t('Channel account deleted'));
+      setDeleteTarget(null);
+    } catch (e) {
+      console.error(e);
+      const message = e instanceof Error ? e.message : String(e);
+      toast.error(`${t('Operation failed')}: ${message}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -65,8 +133,8 @@ export default function SettingsPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Omnichannel Settings')}</h1>
           <p className="mt-2 text-sm text-gray-400">{t('Connect your LinkedIn and WhatsApp accounts to enable multi-channel outreach.')}</p>
         </div>
-        <Button onClick={fetchAccounts} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
-          <RefreshCw className="w-4 h-4" /> {t('Refresh')}
+        <Button onClick={() => fetchAccounts({ sync: true })} disabled={isSyncing} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} /> {isSyncing ? t('Syncing...') : t('Sync status')}
         </Button>
       </div>
 
@@ -79,36 +147,70 @@ export default function SettingsPage() {
 
             {isLoading ? (
               <div className="py-8 text-center text-gray-500">{t('Loading channel accounts...')}</div>
+            ) : fetchError ? (
+              <div className="py-12 text-center text-gray-500 border border-dashed border-red-500/20 rounded-lg">
+                <p>{t('Network error')}</p>
+                <button onClick={() => fetchAccounts()} className="mt-3 text-sm text-indigo-400 hover:text-indigo-300 underline">{t('Refresh')}</button>
+              </div>
             ) : accounts.length === 0 ? (
               <div className="py-12 text-center text-gray-500 border border-dashed border-white/10 rounded-lg">
                 {t('No omnichannel accounts connected yet.')}
               </div>
             ) : (
               <div className="space-y-4">
-                {accounts.map(acc => (
-                  <div key={acc.id} className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
-                    <div className="flex items-center gap-4">
+                {accounts.map(acc => {
+                  const provider = normaliseProvider(acc.account_type);
+                  const reconnectKey = `account-${acc.id}`;
+                  const isConnecting = connectingKey === reconnectKey;
+
+                  return (
+                  <div key={acc.id} className="flex flex-col gap-4 p-4 bg-white/5 rounded-lg border border-white/10 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex min-w-0 items-center gap-4">
                       <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
                         {acc.account_type === 'LINKEDIN' ? <span className="text-blue-500 font-bold">in</span> : <MessageSquare className="w-5 h-5 text-green-500" />}
                       </div>
-                      <div>
-                        <div className="font-medium text-white">{acc.name}</div>
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-white">{acc.name || t('Unnamed account')}</div>
                         <div className="text-sm text-gray-400">{t('Type')}: {acc.account_type}</div>
+                        <div className="text-xs text-gray-500">{t('Status')}: {acc.status}</div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                       {acc.status === 'OK' ? (
                         <span className="flex items-center gap-1 text-sm text-emerald-500 bg-emerald-400/10 px-2.5 py-1 rounded-full">
                           <CheckCircle2 className="w-4 h-4" /> {t('Connected')}
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1 text-sm text-amber-400 bg-amber-400/10 px-2.5 py-1 rounded-full">
-                          <AlertCircle className="w-4 h-4" /> {t('Action Required')}
-                        </span>
+                        <>
+                          <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-sm text-amber-700 ring-1 ring-amber-200">
+                            <AlertCircle className="w-4 h-4" /> {t('Action Required')}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!provider || isConnecting}
+                            onClick={() => connectChannel(acc.account_type, acc.name, reconnectKey)}
+                            className="gap-2 border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+                          >
+                            {isConnecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
+                            {isConnecting ? t('Reconnecting...') : t('Reconnect')}
+                          </Button>
+                        </>
                       )}
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => setDeleteTarget(acc)}
+                        className="text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        aria-label={t('Delete channel account')}
+                        title={t('Delete channel account')}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -135,6 +237,19 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title={t('Delete channel account')}
+        message={t('Are you sure you want to delete this channel account from AutoLeadGen?')}
+        confirmLabel={isDeleting ? t('Deleting...') : t('Yes, delete')}
+        onConfirm={deleteChannelAccount}
+        onCancel={() => {
+          if (!isDeleting) {
+            setDeleteTarget(null);
+          }
+        }}
+      />
     </div>
   );
 }

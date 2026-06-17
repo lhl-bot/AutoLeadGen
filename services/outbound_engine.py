@@ -1611,6 +1611,26 @@ def _apollo_search_and_extract(wf_id: int, api_key: str, batch_lead_limit: Optio
         stats["error"] = str(e)
         return stats
 
+def _has_recent_outbound(lead_id: int, db, window_seconds: int) -> bool:
+    """True if an outbound email to this lead was logged within the window.
+
+    Send idempotency guard: the workers hold only in-process locks, so the same
+    lead can be picked up twice — by overlapping ticks, a crash-and-retry after the
+    send succeeded but the status write failed, or a second API instance. Because a
+    successful send always writes an EmailLog first, a short look-back here stops a
+    duplicate cold email from going out. The window is far shorter than any
+    legitimate follow-up interval (which is >= 24h), so real follow-ups are unaffected.
+    """
+    if window_seconds <= 0:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+    return db.query(EmailLog.id).filter(
+        EmailLog.lead_id == lead_id,
+        EmailLog.direction == "outbound",
+        EmailLog.sent_at >= cutoff,
+    ).first() is not None
+
+
 async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool = True, raise_on_credit_error: bool = False):
     credit_charged = False
     sent_successfully = False
@@ -1629,6 +1649,16 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
         temporary_reason = temporary_send_block_reason(lead, db)
         if temporary_reason:
             logger.info(f"Skipping {lead.email}: {temporary_reason}")
+            return
+
+        # Idempotency guard against duplicate sends (overlapping ticks / retries /
+        # multiple instances). Keep the window well under the follow-up interval.
+        dedupe_window = _int_env("EMAIL_SEND_DEDUPE_WINDOW_SECONDS", 600, 0, 86400)
+        if _has_recent_outbound(lead.id, db, dedupe_window):
+            logger.warning(
+                f"Skipping duplicate send to {lead.email}: an outbound email to lead "
+                f"#{lead.id} was already logged within {dedupe_window}s"
+            )
             return
 
         per_account_daily_cap = _int_env("EMAIL_MAX_DAILY_PER_ACCOUNT", 15, 1, 500)

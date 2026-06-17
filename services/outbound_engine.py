@@ -566,49 +566,101 @@ async def process_workflow(wf_id: int):
                     worth_lookup = (not require_relevance) or _lead_worth_email_lookup(
                         company_name, job_title, email_lookup_tokens
                     )
+                    _prescore = None  # cheap rule-based fit score, computed lazily; shared by email+phone gates
+
+                    # #2 Reuse an email already obtained for this same person — free (no LeadContact charge).
+                    if (not has_usable_email) and linkedin_url:
+                        reused = _find_existing_email(linkedin_url, exclude_lead_id=lead_id)
+                        if reused:
+                            email = reused
+                            has_usable_email = True
+                            db_lc = SessionLocal()
+                            try:
+                                lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
+                                if lead_lc:
+                                    lead_lc.email = reused
+                                    if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in reused:
+                                        lead_lc.domain = reused.split("@")[-1]
+                                        domain = lead_lc.domain
+                                    lead_lc.data_sources = (lead_lc.data_sources or "") + ",reuse"
+                                    db_lc.commit()
+                                    logger.info(f"Reused existing email for {linkedin_url}: {reused} (no LeadContact charge)")
+                            finally:
+                                db_lc.close()
+
                     if (not has_usable_email) and linkedin_url and not worth_lookup:
                         logger.info(
                             f"[LeadContact] Skipping paid email lookup for off-target lead "
                             f"{lead_id} ({company_name or '?'} / {job_title or '?'})"
                         )
+
                     if (not has_usable_email) and linkedin_url and worth_lookup:
-                        _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
-                        if _lc_key:
-                            from services.leadcontact_client import LeadContactClient
-                            lc = LeadContactClient(_lc_key)
-                            lc_result = lc.query_email_with_validation(linkedin_url)
-                            lc_email = lc_result.get("email")
-                            if lc_email:
-                                email = lc_email
-                                has_usable_email = True
-                                db_lc = SessionLocal()
-                                try:
-                                    lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
-                                    if lead_lc:
-                                        lead_lc.email = lc_email
-                                        if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in lc_email:
-                                            lead_lc.domain = lc_email.split("@")[-1]
-                                            domain = lead_lc.domain
-                                        lead_lc.email_validation_status = "valid" if lc_result.get("valid") else "catch-all"
-                                        lead_lc.email_verified = bool(lc_result.get("valid"))
-                                        lead_lc.data_sources = (lead_lc.data_sources or "") + ",leadcontact"
-                                        db_lc.commit()
-                                        logger.info(f"[LeadContact] Email found for {linkedin_url}: {lc_email}")
-                                finally:
-                                    db_lc.close()
-                            else:
-                                logger.info(f"[LeadContact] No email found for {linkedin_url}: {lc_result.get('error', 'unknown')}")
+                        proceed_email = True
+                        # #3 Fit gate: don't spend 10 credits on a clearly low-fit lead.
+                        email_min = _int_env("LEADCONTACT_ENRICH_MIN_FIT_SCORE", 30, 0, 100)
+                        if email_min > 0:
+                            _prescore = _prescore_lead(lead_id, wf_id)
+                            if _prescore is not None and _prescore < email_min:
+                                proceed_email = False
+                                logger.info(f"[LeadContact] Skipping email lookup for low-fit lead {lead_id} (score {_prescore} < {email_min})")
+                        # #5 Daily budget cap.
+                        if proceed_email and not _lc_budget_check(wf_id, "email"):
+                            proceed_email = False
+                            logger.warning(f"[LeadContact] Daily email-lookup budget reached for workflow {wf_id}; skipping")
+
+                        if proceed_email:
+                            _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
+                            if _lc_key:
+                                from services.leadcontact_client import LeadContactClient
+                                lc = LeadContactClient(_lc_key)
+                                lc_result = lc.query_email_with_validation(linkedin_url)
+                                lc_email = lc_result.get("email")
+                                if lc_email:
+                                    _lc_budget_record(wf_id, "email")  # count only billed hits
+                                    email = lc_email
+                                    has_usable_email = True
+                                    db_lc = SessionLocal()
+                                    try:
+                                        lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
+                                        if lead_lc:
+                                            lead_lc.email = lc_email
+                                            if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in lc_email:
+                                                lead_lc.domain = lc_email.split("@")[-1]
+                                                domain = lead_lc.domain
+                                            lead_lc.email_validation_status = "valid" if lc_result.get("valid") else "catch-all"
+                                            lead_lc.email_verified = bool(lc_result.get("valid"))
+                                            lead_lc.data_sources = (lead_lc.data_sources or "") + ",leadcontact"
+                                            db_lc.commit()
+                                            logger.info(f"[LeadContact] Email found for {linkedin_url}: {lc_email}")
+                                    finally:
+                                        db_lc.close()
+                                else:
+                                    logger.info(f"[LeadContact] No email found for {linkedin_url}: {lc_result.get('error', 'unknown')}")
 
                     # 0.1. Try LeadContact phone enrichment if WhatsApp channel is enabled.
-                    #      Phone lookups cost 30 credits each — same relevance gate.
+                    #      Phone lookups cost 30 credits each (3x email) — gate harder:
+                    #      relevance + a higher fit bar (#4) + daily budget (#5).
                     if linkedin_url and not whatsapp_number and enable_whatsapp and worth_lookup:
+                        proceed_phone = True
+                        phone_min = _int_env("LEADCONTACT_PHONE_MIN_FIT_SCORE", 60, 0, 100)
+                        if phone_min > 0:
+                            if _prescore is None:
+                                _prescore = _prescore_lead(lead_id, wf_id)
+                            if _prescore is not None and _prescore < phone_min:
+                                proceed_phone = False
+                                logger.info(f"[LeadContact] Skipping phone lookup for lead {lead_id} (score {_prescore} < {phone_min})")
+                        if proceed_phone and not _lc_budget_check(wf_id, "phone"):
+                            proceed_phone = False
+                            logger.warning(f"[LeadContact] Daily phone-lookup budget reached for workflow {wf_id}; skipping")
+
                         _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
-                        if _lc_key:
+                        if proceed_phone and _lc_key:
                             from services.leadcontact_client import LeadContactClient
                             lc = LeadContactClient(_lc_key)
                             phone_result = lc.query_phone(linkedin_url)
                             phones = phone_result.get("phones", [])
                             if phones:
+                                _lc_budget_record(wf_id, "phone")  # count only billed hits
                                 # Find the first valid phone
                                 best = next((p for p in phones if p["valid"]), phones[0])
                                 whatsapp_number = best["phone"]
@@ -1473,6 +1525,80 @@ def _email_lookup_target_tokens(search_keywords: str, product_focus: str) -> Lis
     raw = f"{search_keywords or ''} {product_focus or ''}".lower()
     tokens = [t for t in re.split(r"[,;/&\s]+", raw) if len(t) >= 3 and t not in _EMAIL_LOOKUP_STOPWORDS]
     return list(dict.fromkeys(tokens))
+
+
+# In-process daily budget for paid LeadContact lookups. Keyed by (date, wf_id, kind).
+# Resets on restart — a spend ceiling/guardrail, not exact accounting.
+_lc_daily_lookups: Dict[tuple, int] = {}
+
+
+def _lc_budget_cap(kind: str) -> int:
+    if kind == "phone":
+        return _int_env("LEADCONTACT_MAX_PHONE_LOOKUPS_PER_DAY", 50, 0, 1000000)
+    return _int_env("LEADCONTACT_MAX_EMAIL_LOOKUPS_PER_DAY", 300, 0, 1000000)
+
+
+def _lc_budget_check(wf_id: int, kind: str) -> bool:
+    """True if under today's daily budget for paid lookups (no increment). 0 = unlimited.
+
+    kind = 'email' (10 credits/hit) or 'phone' (30 credits/hit).
+    """
+    cap = _lc_budget_cap(kind)
+    if cap <= 0:
+        return True
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return _lc_daily_lookups.get((day, wf_id, kind), 0) < cap
+
+
+def _lc_budget_record(wf_id: int, kind: str) -> None:
+    """Count one actually-charged lookup (call only on a successful/billed hit)."""
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = (day, wf_id, kind)
+    _lc_daily_lookups[key] = _lc_daily_lookups.get(key, 0) + 1
+
+
+def _find_existing_email(linkedin_url: Optional[str], exclude_lead_id: Optional[int] = None) -> Optional[str]:
+    """Reuse an email already obtained for the same person (same LinkedIn URL) so we
+    don't pay LeadContact again for a contact we've already enriched."""
+    if not linkedin_url:
+        return None
+    db = SessionLocal()
+    try:
+        q = db.query(Lead).filter(
+            Lead.linkedin_url == linkedin_url,
+            Lead.email.isnot(None), Lead.email != "",
+        )
+        if exclude_lead_id:
+            q = q.filter(Lead.id != exclude_lead_id)
+        other = q.first()
+        return other.email if other else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def _prescore_lead(lead_id: int, wf_id: int) -> Optional[int]:
+    """Cheap (rule-based, no LLM) fit score 0-100 for a lead, used to gate paid
+    lookups. Returns None if it can't score (then callers should not block)."""
+    db = SessionLocal()
+    try:
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
+        if not lead or not wf:
+            return None
+        persona = None
+        if wf.persona_id:
+            from models import CustomerPersona
+            persona = db.query(CustomerPersona).filter(CustomerPersona.id == wf.persona_id).first()
+        score = apply_lead_score(db, lead, workflow=wf, persona=persona)
+        db.commit()
+        return int(score.score) if score and score.score is not None else None
+    except Exception as e:
+        logger.warning(f"Prescore failed for lead {lead_id}: {e}")
+        return None
+    finally:
+        db.close()
 
 
 def _lead_worth_email_lookup(company_name: Optional[str], job_title: Optional[str], target_tokens: List[str]) -> bool:

@@ -134,16 +134,21 @@ class LeadContactClient:
         industries: Optional[List[str]] = None,
         keyword: Optional[str] = None,
         current_titles_only: bool = True,
-        per_page: int = 10
+        per_page: int = 10,
+        next_page_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Advanced employee search using filters.
         Endpoint: POST /employess/query/advanced
+
+        Pagination is cursor-based: the response returns ``nextPageToken``; pass it
+        back as ``next_page_token`` to fetch the next page (empty token = no more
+        pages). See the LeadContact API docs.
         """
         # Note the spelling "/employess/query/advanced" is used as per API doc.
         url = f"{self.base_url}/employess/query/advanced"
         payload = {}
-        
+
         if job_titles:
             payload["jobTitle"] = job_titles
         if locations:
@@ -152,11 +157,10 @@ class LeadContactClient:
             payload["industry"] = industries
         if keyword:
             payload["keyword"] = keyword
-            
+        if next_page_token:
+            payload["nextPageToken"] = next_page_token
+
         payload["currentTitlesOnly"] = current_titles_only
-        
-        # We can pass nextPageToken and other parameters if we support paging
-        # For perPage, let's include it in case the API uses it, but also keep standard keys
         payload["perPage"] = per_page
         
         try:

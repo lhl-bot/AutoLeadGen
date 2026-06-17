@@ -66,6 +66,9 @@ _linkedin_cooldown_until = 0.0
 # leads. When a search yields no new leads we back this workflow off so we stop
 # paying for the same data.
 _leadcontact_backoff_until: Dict[int, float] = {}
+# Per-workflow LeadContact pagination cursor so each search fetches a NEW page
+# instead of re-paying for page 1. {wf_id: {"query": <attempt>, "token": <nextPageToken>}}
+_leadcontact_cursor: Dict[int, Dict[str, Any]] = {}
 MAX_CONSECUTIVE_ERRORS = 5
 
 def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 100000) -> int:
@@ -1457,12 +1460,17 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             db.close()
 
         # Relaxation ladder: try specific query first, loosen only if it returns 0.
+        # Cursor pagination: when we already have a nextPageToken for a query, fetch
+        # the NEXT page of that same query instead of re-paying for page 1.
         plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus)
+        cursor = _leadcontact_cursor.get(wf_id)
         per_page = min(max_lc_leads, batch_lead_limit)
         employees = []
         chosen = None
+        next_token = ""
         for attempt in plan:
-            logger.info(f"[LeadContact] Searching — {attempt}")
+            token = cursor.get("token") if (cursor and cursor.get("query") == attempt) else None
+            logger.info(f"[LeadContact] Searching — {attempt}{' (next page)' if token else ''}")
             result = lc.search_employees(
                 job_titles=attempt["job_titles"],
                 locations=attempt["locations"],
@@ -1470,11 +1478,13 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                 keyword=attempt["keyword"],
                 current_titles_only=True,
                 per_page=per_page,
+                next_page_token=token,
             )
             emps = result.get("employees", []) if isinstance(result, dict) else []
             if emps:
                 employees = emps
                 chosen = attempt
+                next_token = (result.get("nextPageToken") or "") if isinstance(result, dict) else ""
                 break
             if isinstance(result, dict) and result.get("error"):
                 logger.warning(f"[LeadContact] search error, stopping ladder: {result.get('error')}")
@@ -1482,6 +1492,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
 
         if not employees:
             logger.info(f"[LeadContact] No employees found after {len(plan)} query tiers")
+            _leadcontact_cursor.pop(wf_id, None)
             _leadcontact_backoff_until[wf_id] = time.time() + _int_env(
                 "LEADCONTACT_EMPTY_BACKOFF_SECONDS", 86400, 300, 604800
             )
@@ -1554,10 +1565,19 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                 db_insert.close()
 
         stats["new_leads"] = new_leads
+        stats["next_page"] = bool(next_token)
         logger.info(f"[LeadContact] Added {new_leads} leads from LeadContact search")
+
+        # Advance the pagination cursor so the next run fetches the next page.
+        if chosen is not None and next_token:
+            _leadcontact_cursor[wf_id] = {"query": chosen, "token": next_token}
+        else:
+            # No more pages for this query — clear cursor so a future run can restart.
+            _leadcontact_cursor.pop(wf_id, None)
+
         if new_leads == 0:
-            # Returned contacts but all were duplicates (no pagination → same page-1
-            # contacts). Back off so we stop re-paying for the same data every cycle.
+            # This page yielded only duplicates (e.g. cursor exhausted and we
+            # restarted at page 1). Back off so we stop re-paying for the same data.
             cooldown = _int_env("LEADCONTACT_DEDUP_BACKOFF_SECONDS", 21600, 300, 604800)
             _leadcontact_backoff_until[wf_id] = time.time() + cooldown
             logger.warning(

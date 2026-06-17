@@ -348,5 +348,37 @@ def get_lead_brief(
         
     if not db_lead.brief:
         raise HTTPException(status_code=404, detail="Brief not found for this lead")
-        
+
     return db_lead.brief
+
+
+@router.post("/{lead_id}/brief", response_model=schemas.LeadBriefResponse)
+async def generate_lead_brief(
+    lead_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Run AI deep-research on demand and (re)generate this lead's brief.
+
+    The brief is otherwise only produced by the outbound engine, so pool leads
+    that were never processed had no brief to show. This generates it on request.
+    """
+    db_lead = _verify_lead_ownership(lead_id, db, user)
+    domain = (db_lead.domain or "").strip()
+    if not domain:
+        raise HTTPException(status_code=400, detail="Lead has no domain/website to research")
+
+    from services.research_agent import build_and_save_lead_brief
+    try:
+        ok = await build_and_save_lead_brief(lead_id, domain)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI research failed: {exc}") from exc
+    if not ok:
+        raise HTTPException(status_code=502, detail="AI research did not return a usable brief; please try again")
+
+    # The brief was written in a separate session — read it back fresh.
+    db.expire_all()
+    brief = db.query(models.LeadBrief).filter(models.LeadBrief.lead_id == lead_id).first()
+    if not brief:
+        raise HTTPException(status_code=502, detail="Brief generation produced no result")
+    return brief

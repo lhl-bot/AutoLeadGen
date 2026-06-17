@@ -245,12 +245,17 @@ export default function PoolsPage() {
     setSendDraftMessage('');
     setIsBriefLoading(true);
     try {
-      const res = await apiFetch(`/api/leads/${lead.id}/brief`);
+      let res = await apiFetch(`/api/leads/${lead.id}/brief`);
+      // No brief yet — run AI deep-research on demand to generate one.
+      if (res.status === 404) {
+        res = await apiFetch(`/api/leads/${lead.id}/brief`, { method: 'POST' });
+      }
       if (res.ok) {
         const data = await res.json();
         setLeadBrief(data);
       } else {
-        setBriefError('未找到该客户的 AI 简介或尚未生成。');
+        const err = await res.json().catch(() => ({}));
+        setBriefError(formatApiDetail(err.detail, '生成 AI 简介失败，请稍后重试。'));
       }
     } catch (e) {
       console.error(e);

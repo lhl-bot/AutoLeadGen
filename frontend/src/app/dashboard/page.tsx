@@ -5,6 +5,8 @@ import { motion } from 'framer-motion';
 import { Bot, Mail, Zap, Search, Briefcase, MessageSquare, TrendingUp, Sparkles, ArrowRight } from 'lucide-react';
 import { apiFetch } from '@/lib/utils';
 import type { DashboardKpis, DashboardTrend, TodayReport } from '@/lib/types';
+import ConversionFunnel from '@/components/ConversionFunnel';
+import ActivityFeed from '@/components/ActivityFeed';
 import {
   AreaChart,
   Area,
@@ -180,6 +182,11 @@ export default function DashboardOverview() {
                 <div className="text-sm font-medium uppercase tracking-wider text-slate-500">{stat.label}</div>
               </motion.div>
             ))}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2 mb-6">
+            <ConversionFunnel />
+            <ActivityFeed />
           </div>
 
           <div className="grid lg:grid-cols-3 gap-4 mb-8">

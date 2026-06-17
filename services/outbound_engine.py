@@ -10,7 +10,7 @@ from database import SessionLocal, db_retry, db_retry_async
 from models import Workflow, Lead, EmailLog, ProcessedDomain
 from services.search_engine import is_domain_quality_candidate, search_domain_results
 from services.snovio_client import SnovioClient
-from services.ai_writer import generate_email
+from services.ai_writer import generate_email, build_persona_few_shot
 from services.research_agent import build_and_save_lead_brief
 from services.email_sender import send_email
 from services.auth import decrypt_smtp_pass
@@ -691,21 +691,25 @@ async def process_workflow(wf_id: int):
                     finally:
                         db_credit.close()
 
+                    # Build few-shot examples with a short-lived session, then
+                    # release the connection BEFORE the slow LLM call so we don't
+                    # hold a MySQL connection idle for the whole generation.
                     db_shot = SessionLocal()
                     try:
-                        draft = await asyncio.to_thread(
-                            generate_email,
-                            first_name=first_name or "",
-                            last_name=last_name or "",
-                            company_name=company_name, 
-                            target_role=job_title, 
-                            website_summary=brief_summary, 
-                            template=enriched_prompt,
-                            db=db_shot,
-                            persona_id=persona_id
-                        )
+                        few_shot_prompt = build_persona_few_shot(db_shot, persona_id)
                     finally:
                         db_shot.close()
+
+                    draft = await asyncio.to_thread(
+                        generate_email,
+                        first_name=first_name or "",
+                        last_name=last_name or "",
+                        company_name=company_name,
+                        target_role=job_title,
+                        website_summary=brief_summary,
+                        template=enriched_prompt,
+                        few_shot_prompt=few_shot_prompt,
+                    )
                     if draft:
                         db2 = SessionLocal()
                         try:
@@ -824,6 +828,12 @@ async def process_workflow(wf_id: int):
                                 )
                                 continue
                             
+                            # Release the DB connection back to the pool before the
+                            # slow LLM call (consume_credits commits when credits are
+                            # enabled; commit here too so a no-credit run doesn't hold
+                            # an open transaction idle across the generation).
+                            db2.commit()
+
                             followup_draft = await asyncio.to_thread(
                                 draft_followup_email,
                                 lead_data={"first_name": first_name, "company_name": company_name},
@@ -1212,7 +1222,7 @@ def _search_and_extract_leads(
                     logger.info(f"Reached max prospect attempts ({max_prospect_attempts}) for domain: {domain}, skipping remaining prospects.")
                     break
                 search_url = p.get("search_emails_start")
-                email = snovio.get_prospect_email(search_url) if search_url else None
+                email = snovio.get_prospect_email(search_url, domain=domain) if search_url else None
                 if email and is_email_good_for_lead(email, domain):
                     prospect_emails.append((email, p))
                 elif email:

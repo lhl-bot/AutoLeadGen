@@ -59,6 +59,52 @@ def rotate_country_in_keyword(current_keyword: str) -> str:
     return f"{base_keyword} {next_country}".strip()
 
 
+def build_persona_few_shot(db: Session, persona_id: int) -> str:
+    """Build a few-shot prompt fragment from historically successful emails for a persona.
+
+    This performs all DB access up-front so callers can close their session
+    *before* the slow LLM call, avoiding holding a MySQL connection idle for the
+    full generation (which triggers "Lost connection during query" timeouts).
+    """
+    if not (db and persona_id):
+        return ""
+    try:
+        successful_leads = (
+            db.query(models.Lead)
+            .join(models.Workflow, models.Lead.workflow_id == models.Workflow.id)
+            .filter(
+                models.Workflow.persona_id == persona_id,
+                models.Lead.ai_draft.isnot(None),
+                models.Lead.ai_draft != "",
+                (models.Lead.user_rating == 'positive') | (models.Lead.status == 'replied')
+            )
+            .order_by(models.Lead.id.desc())
+            .limit(2)
+            .all()
+        )
+
+        examples_text = []
+        for i, lead in enumerate(successful_leads, 1):
+            brief = db.query(models.LeadBrief).filter(models.LeadBrief.lead_id == lead.id).first()
+            brief_summary = brief.company_overview if brief else "N/A"
+            examples_text.append(
+                f"Example {i} (High Response Rate):\n"
+                f"- Recipient: {lead.first_name} ({lead.job_title}) at {lead.company_name}\n"
+                f"- Company Research:\n{brief_summary}\n"
+                f"- Generated Email:\n{lead.ai_draft}\n"
+            )
+
+        if examples_text:
+            return (
+                "\n\nTo ensure tone consistency and maintain high reply rates, reference these historical cold emails sent under this persona that successfully generated positive responses:\n\n"
+                + "\n---\n".join(examples_text)
+                + "\n---\nWrite the email for the new recipient following a similar tone, brevity, and structure as the examples above."
+            )
+    except Exception as ex:
+        logger.warning(f"Error querying successful examples for few-shot email: {ex}")
+    return ""
+
+
 def generate_email(
     first_name: str,
     last_name: str,
@@ -67,51 +113,24 @@ def generate_email(
     website_summary: str,
     template: str,
     db: Optional[Session] = None,
-    persona_id: Optional[int] = None
+    persona_id: Optional[int] = None,
+    few_shot_prompt: Optional[str] = None,
 ) -> str:
-    """Generate personalized cold email using MiniMax API."""
-    
+    """Generate personalized cold email using MiniMax API.
+
+    Pass a precomputed ``few_shot_prompt`` (via :func:`build_persona_few_shot`)
+    so the caller can release its DB connection before this slow LLM call. When
+    ``few_shot_prompt`` is not supplied, it is built lazily from ``db``/``persona_id``
+    for backward compatibility.
+    """
+
     # Build greeting
     greeting_name = first_name.strip() if first_name and first_name.strip() else "there"
-    
-    # Query successful leads to perform Few-Shot prompting
-    few_shot_prompt = ""
-    if db and persona_id:
-        try:
-            successful_leads = (
-                db.query(models.Lead)
-                .join(models.Workflow, models.Lead.workflow_id == models.Workflow.id)
-                .filter(
-                    models.Workflow.persona_id == persona_id,
-                    models.Lead.ai_draft.isnot(None),
-                    models.Lead.ai_draft != "",
-                    (models.Lead.user_rating == 'positive') | (models.Lead.status == 'replied')
-                )
-                .order_by(models.Lead.id.desc())
-                .limit(2)
-                .all()
-            )
-            
-            examples_text = []
-            for i, lead in enumerate(successful_leads, 1):
-                brief = db.query(models.LeadBrief).filter(models.LeadBrief.lead_id == lead.id).first()
-                brief_summary = brief.company_overview if brief else "N/A"
-                examples_text.append(
-                    f"Example {i} (High Response Rate):\n"
-                    f"- Recipient: {lead.first_name} ({lead.job_title}) at {lead.company_name}\n"
-                    f"- Company Research:\n{brief_summary}\n"
-                    f"- Generated Email:\n{lead.ai_draft}\n"
-                )
-            
-            if examples_text:
-                few_shot_prompt = (
-                    "\n\nTo ensure tone consistency and maintain high reply rates, reference these historical cold emails sent under this persona that successfully generated positive responses:\n\n"
-                    + "\n---\n".join(examples_text)
-                    + "\n---\nWrite the email for the new recipient following a similar tone, brevity, and structure as the examples above."
-                )
-        except Exception as ex:
-            logger.warning(f"Error querying successful examples for few-shot email: {ex}")
-    
+
+    # Few-Shot prompting: prefer precomputed fragment; otherwise build from DB.
+    if few_shot_prompt is None:
+        few_shot_prompt = build_persona_few_shot(db, persona_id) if (db and persona_id) else ""
+
     system_prompt = """You are an elite B2B sales copywriter. You write short, crisp, highly engaging emails that read like they were written by a thoughtful colleague. Your tone is professional yet casual, direct, and completely devoid of corporate fluff, marketing buzzwords, or cheesy sales pitches. You focus on starting conversations, not pitching products on the first touch."""
 
     prompt = f"""Write a highly personalized, natural B2B cold email.

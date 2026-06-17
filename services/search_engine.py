@@ -14,6 +14,7 @@ logger = logging.getLogger("outbound_engine")
 
 
 _tavily_disabled_until = 0.0
+_bocha_disabled_until = 0.0
 
 EUROPEAN_MARKETS = [
     "Spain", "Italy", "Germany", "France", "Netherlands", "United Kingdom",
@@ -436,7 +437,21 @@ def _bocha_web_pages(data: Dict) -> List[Dict]:
     return [page for page in pages if isinstance(page, dict)]
 
 
+def _bocha_enabled() -> bool:
+    """False while Bocha is in a circuit-breaker cooldown (quota/auth failure)."""
+    return time.time() >= _bocha_disabled_until
+
+
+def _disable_bocha(reason: str):
+    global _bocha_disabled_until
+    cooldown = _int_env("BOCHA_DISABLE_COOLDOWN_SECONDS", 3600, 60, 86400)
+    _bocha_disabled_until = time.time() + cooldown
+    logger.warning(f"Bocha disabled for {cooldown}s: {reason}")
+
+
 def _search_bocha_results(search_query: str, api_key: str, max_results: int = 10) -> List[Dict[str, str]]:
+    if not _bocha_enabled():
+        return []
     endpoint = os.environ.get("BOCHA_API_URL", "https://api.bochaai.com/v1/web-search")
     payload = {
         "query": search_query,
@@ -454,6 +469,11 @@ def _search_bocha_results(search_query: str, api_key: str, max_results: int = 10
         resp = _http.post(endpoint, headers=headers, json=payload, timeout=_int_env("BOCHA_SEARCH_TIMEOUT", 20, 5, 60))
         if resp.status_code != 200:
             logger.warning(f"Bocha API returned {resp.status_code}: {resp.text[:300]}")
+            # Persistent account-level failures (quota exhausted / bad key / rate
+            # limit) won't recover on the next query — trip the breaker so we stop
+            # hammering Bocha (and adding latency) on every single search.
+            if resp.status_code in (401, 402, 403, 429):
+                _disable_bocha(f"HTTP {resp.status_code} — check Bocha account balance/quota and API key")
             return []
 
         results = []
@@ -490,7 +510,7 @@ def _search_bocha_query(search_query: str, api_key: str, max_domains: int = 30) 
 
 def _search_plain_query(search_query: str, max_domains: int = 30) -> List[str]:
     bocha_api_key = os.environ.get("BOCHA_API_KEY")
-    if bocha_api_key:
+    if bocha_api_key and _bocha_enabled():
         domains = _search_bocha_query(search_query, bocha_api_key, max_domains=max_domains)
         if domains:
             return domains[:max_domains]
@@ -511,7 +531,7 @@ def search_domains(keywords: str, offset: int = 0, max_domains: int = None) -> L
     search_query = _search_query_for_offset(keywords, offset)
 
     bocha_api_key = os.environ.get("BOCHA_API_KEY")
-    if bocha_api_key:
+    if bocha_api_key and _bocha_enabled():
         domains = _search_bocha_query(search_query, bocha_api_key, max_domains=max_domains)
         if domains:
             return domains

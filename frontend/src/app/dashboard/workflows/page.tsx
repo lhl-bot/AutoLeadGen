@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User } from 'lucide-react';
+import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -162,6 +162,7 @@ export default function WorkflowsPage() {
   // Playbook state
   const [playbookPresets, setPlaybookPresets] = useState<PlaybookPreset[]>([]);
   const [showPlaybookSelector, setShowPlaybookSelector] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
 
   // Delete confirmation state
@@ -216,6 +217,7 @@ export default function WorkflowsPage() {
     setEditingWorkflowId(null);
     setFormData(getDefaultWorkflowForm());
     setShowPlaybookSelector(true);
+    setWizardStep(1);
     setIsWorkflowDialogOpen(true);
   };
 
@@ -224,6 +226,7 @@ export default function WorkflowsPage() {
     setEditingWorkflowId(workflow.id);
     setFormData(workflowToForm(workflow));
     setShowPlaybookSelector(false);
+    setWizardStep(1);
     setIsWorkflowDialogOpen(true);
   };
 
@@ -233,7 +236,41 @@ export default function WorkflowsPage() {
       setEditingWorkflowId(null);
       setFormData(getDefaultWorkflowForm());
       setShowPlaybookSelector(false);
+      setWizardStep(1);
     }
+  };
+
+  // Wizard steps: 1 Targeting · 2 Messaging · 3 Delivery · 4 Channels.
+  const WIZARD_STEPS = [
+    t('Targeting'),
+    t('Messaging'),
+    t('Delivery'),
+    t('Channels'),
+  ];
+
+  const validateWizardStep = (step: number): boolean => {
+    if (step === 1) {
+      if (!formData.name.trim()) { toast.error(t('Workflow name is required')); return false; }
+      if (!formData.search_keywords.trim()) { toast.error(t('Search keywords are required')); return false; }
+      if (!formData.target_positions.trim()) { toast.error(t('Target positions are required')); return false; }
+    }
+    return true;
+  };
+
+  const goToNextStep = () => {
+    if (!validateWizardStep(wizardStep)) return;
+    setWizardStep(s => Math.min(WIZARD_STEPS.length, s + 1));
+  };
+
+  const goToPrevStep = () => setWizardStep(s => Math.max(1, s - 1));
+
+  // Intercept form submit: advance the wizard instead of saving until the last step.
+  const handleWizardSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (wizardStep < WIZARD_STEPS.length) { goToNextStep(); return; }
+    // Final guard: step 1 holds all required fields.
+    if (!validateWizardStep(1)) { setWizardStep(1); return; }
+    void handleSaveWorkflow(e);
   };
 
   const selectPlaybook = (preset: PlaybookPreset) => {
@@ -522,7 +559,29 @@ export default function WorkflowsPage() {
                 </div>
               ) : (
 
-              <form onSubmit={handleSaveWorkflow} className="space-y-6 mt-4">
+              <form onSubmit={handleWizardSubmit} className="space-y-6 mt-4">
+                {/* Step indicator */}
+                <div className="flex items-center gap-1.5">
+                  {WIZARD_STEPS.map((label, i) => {
+                    const n = i + 1;
+                    const active = wizardStep === n;
+                    const done = wizardStep > n;
+                    return (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => { if (n < wizardStep || validateWizardStep(wizardStep)) setWizardStep(n); }}
+                        className={`flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${active ? 'bg-indigo-500/10 text-indigo-600' : done ? 'text-emerald-600' : 'text-muted-foreground hover:bg-muted'}`}
+                      >
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${active ? 'bg-indigo-600 text-white' : done ? 'bg-emerald-500 text-white' : 'bg-muted text-muted-foreground'}`}>{n}</span>
+                        <span className="hidden sm:inline">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {wizardStep === 1 && (
+                <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('Workflow Name')} *</Label>
@@ -601,6 +660,11 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
+                </div>
+                )}
+
+                {wizardStep === 2 && (
+                <div className="space-y-6">
                 <div className="space-y-2">
                   <Label>{t('AI Prompt')}</Label>
                   <Textarea value={formData.ai_prompt} onChange={e => setFormData({...formData, ai_prompt: e.target.value})} placeholder="Instructions for AI drafting..." />
@@ -638,7 +702,11 @@ export default function WorkflowsPage() {
                   <Label>{t('Email Signature')}</Label>
                   <Textarea value={formData.email_signature} onChange={e => setFormData({...formData, email_signature: e.target.value})} placeholder="Best regards,..." />
                 </div>
+                </div>
+                )}
 
+                {wizardStep === 3 && (
+                <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('Client Pool')}</Label>
@@ -692,6 +760,11 @@ export default function WorkflowsPage() {
                   </label>
                 </div>
 
+                </div>
+                )}
+
+                {wizardStep === 4 && (
+                <div className="space-y-6">
                 {/* Omnichannel Settings */}
                 <div className="border-t pt-4">
                   <h4 className="text-sm font-medium text-foreground/80 mb-4">{t('Channel Settings')}</h4>
@@ -725,10 +798,23 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
-                <div className="pt-4 flex justify-end">
-                  <Button type="submit" disabled={isSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-                    {isSaving ? 'Saving...' : editingWorkflowId ? t('Edit Workflow') : t('Save')}
+                </div>
+                )}
+
+                <div className="flex items-center justify-between border-t pt-4">
+                  <Button type="button" variant="ghost" onClick={goToPrevStep} disabled={wizardStep === 1} className="gap-1">
+                    <ChevronLeft className="h-4 w-4" /> {t('Back')}
                   </Button>
+                  <span className="text-xs text-muted-foreground">{wizardStep} / {WIZARD_STEPS.length}</span>
+                  {wizardStep < WIZARD_STEPS.length ? (
+                    <Button type="button" onClick={goToNextStep} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
+                      {t('Next')} <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button type="submit" disabled={isSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                      {isSaving ? t('Saving...') : editingWorkflowId ? t('Save Changes') : t('Create Workflow')}
+                    </Button>
+                  )}
                 </div>
               </form>
               )}

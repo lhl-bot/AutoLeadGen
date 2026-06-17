@@ -91,6 +91,7 @@ export interface CustomerPersona {
   ai_prompt_template?: string | null
   customer_types?: string | null
   product_categories?: string | null
+  company_size?: string | null
   evidence_sources?: string | null
   qualification_rules?: string | null
   disqualification_rules?: string | null

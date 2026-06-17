@@ -13,6 +13,7 @@ class CustomerPersonaBase(BaseModel):
     ai_prompt_template: Optional[str] = None
     customer_types: Optional[str] = None
     product_categories: Optional[str] = None
+    company_size: Optional[str] = None
     evidence_sources: Optional[str] = None
     qualification_rules: Optional[str] = None
     disqualification_rules: Optional[str] = None

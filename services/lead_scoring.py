@@ -278,6 +278,8 @@ def build_outreach_context(
             parts.append(f"Buyer types to prioritize: {persona.customer_types}")
         if persona.product_categories:
             parts.append(f"Relevant product categories: {persona.product_categories}")
+        if getattr(persona, "company_size", None):
+            parts.append(f"Target company size: {persona.company_size}")
         if persona.qualification_rules:
             parts.append(f"Qualification rules: {persona.qualification_rules}")
         if persona.disqualification_rules:

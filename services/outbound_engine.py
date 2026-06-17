@@ -1405,7 +1405,7 @@ def _lc_industry_map() -> Dict[str, str]:
     return mapping
 
 
-def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus):
+def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size=None):
     """Ordered LeadContact search attempts, most specific first.
 
     The previous mapping over-constrained the query (a guessed industry label +
@@ -1437,21 +1437,22 @@ def _build_leadcontact_query_plan(keywords, target_role, target_region, product_
 
     locations = [target_region] if target_region else None
     use_industry = _bool_env("LEADCONTACT_USE_INDUSTRY", True)
+    size = company_size or None  # carried on all but the broadest fallback tier
 
     plan = []
     if industries and use_industry:
         plan.append({"job_titles": job_titles or None, "locations": locations,
-                     "industries": industries, "keyword": primary_kw or None})
-    # Drop industry (the proven recall-killer), keep titles + region + keyword.
+                     "industries": industries, "company_size": size, "keyword": primary_kw or None})
+    # Drop industry (the proven recall-killer), keep titles + region + size + keyword.
     plan.append({"job_titles": job_titles or None, "locations": locations,
-                 "industries": None, "keyword": primary_kw or None})
-    # Drop titles, keep region + primary keyword.
+                 "industries": None, "company_size": size, "keyword": primary_kw or None})
+    # Drop titles, keep region + size + primary keyword.
     plan.append({"job_titles": None, "locations": locations,
-                 "industries": None, "keyword": primary_kw or None})
-    # Broad last resort: single distinctive word + region.
+                 "industries": None, "company_size": size, "keyword": primary_kw or None})
+    # Broad last resort: single distinctive word + region (size dropped too).
     if focus_kw and focus_kw.lower() != (primary_kw or "").lower():
         plan.append({"job_titles": None, "locations": locations,
-                     "industries": None, "keyword": focus_kw})
+                     "industries": None, "company_size": None, "keyword": focus_kw})
 
     deduped = []
     for p in plan:
@@ -1522,13 +1523,20 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             target_role = wf.target_positions or ""
             target_region = wf.target_region or ""
             product_focus = wf.product_focus or ""
+            # Company-size filter comes from the workflow's persona (if any).
+            company_size = []
+            if wf.persona_id:
+                from models import CustomerPersona
+                persona = db.query(CustomerPersona).filter(CustomerPersona.id == wf.persona_id).first()
+                if persona and getattr(persona, "company_size", None):
+                    company_size = [s.strip() for s in re.split(r"[,;]", persona.company_size) if s.strip()]
         finally:
             db.close()
 
         # Relaxation ladder: try specific query first, loosen only if it returns 0.
         # Cursor pagination: when we already have a nextPageToken for a query, fetch
         # the NEXT page of that same query instead of re-paying for page 1.
-        plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus)
+        plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size or None)
         cursor = _leadcontact_cursor.get(wf_id)
         per_page = min(max_lc_leads, batch_lead_limit)
         employees = []
@@ -1541,6 +1549,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                 job_titles=attempt["job_titles"],
                 locations=attempt["locations"],
                 industries=attempt["industries"],
+                company_size=attempt.get("company_size"),
                 keyword=attempt["keyword"],
                 current_titles_only=True,
                 per_page=per_page,

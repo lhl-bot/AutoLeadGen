@@ -64,3 +64,16 @@ def test_plan_has_no_duplicate_attempts():
     for p in plan:
         assert p not in seen
         seen.append(p)
+
+
+def test_company_size_applied_to_tiers_and_dropped_in_broad_fallback():
+    plan = _build_leadcontact_query_plan(**WF15, company_size=["11_50", "51_200"])
+    # Filtered tiers carry the size constraint...
+    assert plan[0]["company_size"] == ["11_50", "51_200"]
+    # ...and the broad single-word fallback drops it (so we still get results).
+    assert plan[-1]["company_size"] is None
+
+
+def test_no_company_size_means_none_everywhere():
+    plan = _build_leadcontact_query_plan(**WF15)
+    assert all(p["company_size"] is None for p in plan)

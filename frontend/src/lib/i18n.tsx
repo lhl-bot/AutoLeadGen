@@ -395,6 +395,10 @@ export const translations: Record<Language, Record<string, string>> = {
     'activity.unsubscribed': 'Unsubscribed',
     'activity.updated': 'Updated',
 
+    // ── Persona: company size ──
+    'Target Company Size': 'Target Company Size',
+    'Used to filter search by headcount. Leave empty for any size.': 'Used to filter search by headcount. Leave empty for any size.',
+
     // ── Workflow wizard ──
     'Targeting': 'Targeting',
     'Messaging': 'Messaging',
@@ -786,6 +790,10 @@ export const translations: Record<Language, Record<string, string>> = {
     'activity.rejected': '已拒绝',
     'activity.unsubscribed': '已退订',
     'activity.updated': '已更新',
+
+    // ── Persona: company size ──
+    'Target Company Size': '目标公司规模',
+    'Used to filter search by headcount. Leave empty for any size.': '按员工人数筛选搜索;留空则不限规模。',
 
     // ── Workflow wizard ──
     'Targeting': '目标定位',

@@ -136,6 +136,7 @@ class LeadContactClient:
         current_titles_only: bool = True,
         per_page: int = 10,
         next_page_token: Optional[str] = None,
+        company_size: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Advanced employee search using filters.
@@ -155,6 +156,8 @@ class LeadContactClient:
             payload["location"] = locations
         if industries:
             payload["industry"] = industries
+        if company_size:
+            payload["companySize"] = company_size
         if keyword:
             payload["keyword"] = keyword
         if next_page_token:

@@ -44,6 +44,7 @@ class CustomerPersona(Base):
     ai_prompt_template = Column(Text, doc="Template for the AI to generate the email")
     customer_types = Column(Text, nullable=True, doc="Comma separated buyer types, e.g., distributor, agent, brand")
     product_categories = Column(Text, nullable=True, doc="Comma separated product categories to match")
+    company_size = Column(Text, nullable=True, doc="Comma separated target company-size buckets (LeadContact enum: 1_10,11_50,51_200,201_500,501_1000,1001_5000,5001_10000,10001)")
     evidence_sources = Column(Text, nullable=True, doc="Preferred evidence sources: website, customs, social, trade show")
     qualification_rules = Column(Text, nullable=True, doc="Positive fit rules used by lead scoring")
     disqualification_rules = Column(Text, nullable=True, doc="Negative fit rules used by lead scoring")

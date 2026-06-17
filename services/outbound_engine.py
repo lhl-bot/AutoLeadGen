@@ -5,7 +5,7 @@ import logging
 import threading
 import re
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from database import SessionLocal, db_retry, db_retry_async
 from models import Workflow, Lead, EmailLog, ProcessedDomain
 from services.search_engine import is_domain_quality_candidate, search_domain_results
@@ -416,8 +416,14 @@ async def process_workflow(wf_id: int):
             wf_name = wf.name
             wf_user_id = wf.user_id
             wf_ai_prompt = wf.ai_prompt or "Introduce our company and ask for a quick meeting."
+            wf_search_keywords = wf.search_keywords or ""
+            wf_product_focus = wf.product_focus or ""
         finally:
             db.close()
+
+        # Tokens used to decide whether a lead is on-target enough to spend a paid
+        # LeadContact email/phone lookup (10 / 30 credits) on it.
+        email_lookup_tokens = _email_lookup_target_tokens(wf_search_keywords, wf_product_focus)
 
         # 1. Check email daily limits. Do not return early here: LinkedIn and
         # WhatsApp have separate limits and should keep running when email is capped.
@@ -552,9 +558,20 @@ async def process_workflow(wf_id: int):
             async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name, linkedin_url, whatsapp_number):
                 credit_charged = False
                 try:
-                    # 0. Try LeadContact email enrichment if no email or unverified
+                    # 0. Try LeadContact email enrichment if no email or unverified.
+                    #    Email lookups cost 10 credits each (and bill even on a miss),
+                    #    so only spend on leads that look on-target.
                     has_usable_email = bool(email and email.strip())
-                    if (not has_usable_email) and linkedin_url:
+                    require_relevance = _bool_env("LEADCONTACT_ENRICH_REQUIRE_RELEVANCE", True)
+                    worth_lookup = (not require_relevance) or _lead_worth_email_lookup(
+                        company_name, job_title, email_lookup_tokens
+                    )
+                    if (not has_usable_email) and linkedin_url and not worth_lookup:
+                        logger.info(
+                            f"[LeadContact] Skipping paid email lookup for off-target lead "
+                            f"{lead_id} ({company_name or '?'} / {job_title or '?'})"
+                        )
+                    if (not has_usable_email) and linkedin_url and worth_lookup:
                         _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
                         if _lc_key:
                             from services.leadcontact_client import LeadContactClient
@@ -582,8 +599,9 @@ async def process_workflow(wf_id: int):
                             else:
                                 logger.info(f"[LeadContact] No email found for {linkedin_url}: {lc_result.get('error', 'unknown')}")
 
-                    # 0.1. Try LeadContact phone enrichment if WhatsApp channel is enabled
-                    if linkedin_url and not whatsapp_number and enable_whatsapp:
+                    # 0.1. Try LeadContact phone enrichment if WhatsApp channel is enabled.
+                    #      Phone lookups cost 30 credits each — same relevance gate.
+                    if linkedin_url and not whatsapp_number and enable_whatsapp and worth_lookup:
                         _lc_key = os.environ.get("LEADCONTACT_API_KEY", "").strip()
                         if _lc_key:
                             from services.leadcontact_client import LeadContactClient
@@ -603,6 +621,24 @@ async def process_workflow(wf_id: int):
                                         logger.info(f"[LeadContact] Phone found for {linkedin_url}: {whatsapp_number}")
                                 finally:
                                     db_lc.close()
+
+                    # Cost gate: with no usable email this lead can't be emailed, so
+                    # don't spend a research brief + AI draft (LLM + credits) on it.
+                    # Park it as needs_email — it leaves the "found" queue so we never
+                    # re-pay LeadContact to look it up again.
+                    if not has_usable_email:
+                        db_ne = SessionLocal()
+                        try:
+                            lead_ne = db_ne.query(Lead).filter(Lead.id == lead_id).first()
+                            if lead_ne:
+                                lead_ne.status = "needs_email"
+                                if not lead_ne.email_validation_status:
+                                    lead_ne.email_validation_status = "no_email"
+                                db_ne.commit()
+                        finally:
+                            db_ne.close()
+                        logger.info(f"Lead {lead_id} has no usable email; marked needs_email (skipped brief/draft)")
+                        return
 
                     # 0.2. Verify email before research & drafting
                     if has_usable_email:
@@ -1422,6 +1458,36 @@ def _build_leadcontact_query_plan(keywords, target_role, target_region, product_
         if p not in deduped:
             deduped.append(p)
     return deduped
+
+
+_EMAIL_LOOKUP_STOPWORDS = {
+    "the", "and", "for", "with", "company", "companies", "manager", "sales",
+    "distributor", "distributors", "equipment", "supplier", "suppliers", "buyer",
+    "owner", "director", "international", "group", "ltd", "inc", "co", "operator",
+}
+
+
+def _email_lookup_target_tokens(search_keywords: str, product_focus: str) -> List[str]:
+    """Distinctive tokens (e.g. 'padel', 'club') used to judge lead relevance."""
+    raw = f"{search_keywords or ''} {product_focus or ''}".lower()
+    tokens = [t for t in re.split(r"[,;/&\s]+", raw) if len(t) >= 3 and t not in _EMAIL_LOOKUP_STOPWORDS]
+    return list(dict.fromkeys(tokens))
+
+
+def _lead_worth_email_lookup(company_name: Optional[str], job_title: Optional[str], target_tokens: List[str]) -> bool:
+    """Whether to spend a paid email lookup on this lead.
+
+    Errs toward NOT spending only when there is a clear off-target signal: a real
+    company name that matches none of the target tokens. Leads with no company
+    info are allowed (we can't judge), so we never silently drop ambiguous ones —
+    a skipped lead is simply kept as needs_email rather than enriched.
+    """
+    if not target_tokens:
+        return True
+    hay = f"{company_name or ''} {job_title or ''}".lower().strip()
+    if not hay:
+        return True
+    return any(tok in hay for tok in target_tokens)
 
 
 def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[int] = None) -> Dict[str, Any]:

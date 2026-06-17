@@ -1337,6 +1337,84 @@ def _search_and_extract_leads(
         stats["error"] = str(e)
         return stats
 
+# product-focus substring → LeadContact industry label. Extend/override at runtime
+# with LEADCONTACT_INDUSTRY_MAP (a JSON object of substring -> industry label).
+_DEFAULT_LC_INDUSTRY_MAP = {
+    "padel": "Sporting Goods", "pickleball": "Sporting Goods", "tennis": "Sporting Goods",
+    "sport": "Sporting Goods", "medical": "Medical Device", "pharma": "Pharmaceuticals",
+    "software": "Computer Software", "saas": "Computer Software", "hardware": "Computer Hardware",
+    "fintech": "Financial Services", "logistics": "Logistics & Supply Chain",
+    "construction": "Construction", "education": "Education Management",
+}
+
+
+def _lc_industry_map() -> Dict[str, str]:
+    import json
+    mapping = dict(_DEFAULT_LC_INDUSTRY_MAP)
+    raw = os.environ.get("LEADCONTACT_INDUSTRY_MAP", "").strip()
+    if raw:
+        try:
+            mapping.update({str(k).lower(): str(v) for k, v in json.loads(raw).items()})
+        except Exception as e:
+            logger.warning(f"Invalid LEADCONTACT_INDUSTRY_MAP env (ignored): {e}")
+    return mapping
+
+
+def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus):
+    """Ordered LeadContact search attempts, most specific first.
+
+    The previous mapping over-constrained the query (a guessed industry label +
+    a concatenated multi-keyword string) and returned 0 even though the DB had
+    thousands of matches. This builds a relaxation ladder instead: try the
+    specific query, and only if it returns nothing fall back to looser ones.
+    A 0-result LeadContact search costs no points, so the ladder is cost-safe.
+    """
+    keywords = (keywords or "").strip()
+    target_role = (target_role or "").strip()
+    target_region = (target_region or "").strip()
+    product_focus = (product_focus or "").strip()
+
+    job_titles = [t.strip() for t in re.split(r"[,;]", target_role) if t.strip()]
+    kw_tokens = [k.strip() for k in re.split(r"[,;]", keywords) if k.strip()]
+    primary_kw = kw_tokens[0] if kw_tokens else ""
+    # Narrowest single distinctive word (e.g. "padel") as the broad last resort.
+    focus_kw = ""
+    if product_focus:
+        focus_kw = product_focus.split(",")[0].strip().split(" ")[0].strip()
+    if not focus_kw and primary_kw:
+        focus_kw = primary_kw.split(" ")[0].strip()
+
+    haystack = (keywords + " " + product_focus).lower()
+    industries = []
+    for k, v in _lc_industry_map().items():
+        if k in haystack and v not in industries:
+            industries.append(v)
+
+    locations = [target_region] if target_region else None
+    use_industry = _bool_env("LEADCONTACT_USE_INDUSTRY", True)
+
+    plan = []
+    if industries and use_industry:
+        plan.append({"job_titles": job_titles or None, "locations": locations,
+                     "industries": industries, "keyword": primary_kw or None})
+    # Drop industry (the proven recall-killer), keep titles + region + keyword.
+    plan.append({"job_titles": job_titles or None, "locations": locations,
+                 "industries": None, "keyword": primary_kw or None})
+    # Drop titles, keep region + primary keyword.
+    plan.append({"job_titles": None, "locations": locations,
+                 "industries": None, "keyword": primary_kw or None})
+    # Broad last resort: single distinctive word + region.
+    if focus_kw and focus_kw.lower() != (primary_kw or "").lower():
+        plan.append({"job_titles": None, "locations": locations,
+                     "industries": None, "keyword": focus_kw})
+
+    deduped = []
+    for p in plan:
+        if p not in deduped:
+            deduped.append(p)
+    return deduped
+
+
 def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[int] = None) -> Dict[str, Any]:
     """Search for targeted professionals via LeadContact advanced employee query."""
     from services.leadcontact_client import LeadContactClient
@@ -1363,51 +1441,34 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         finally:
             db.close()
 
-        # Map product_focus to LeadContact industry list (best-effort match)
-        industry_map = {
-            "padel": "Sporting Goods",
-            "sports": "Sporting Goods",
-            "pickleball": "Sporting Goods",
-            "tennis": "Sporting Goods",
-            "medical": "Medical Device",
-            "pharma": "Pharmaceuticals",
-            "software": "Computer Software",
-            "saas": "Computer Software",
-            "hardware": "Computer Hardware",
-            "fintech": "Financial Services",
-            "logistics": "Logistics & Supply Chain",
-            "construction": "Construction",
-            "education": "Education Management",
-        }
-        industries = []
-        for k, v in industry_map.items():
-            if k in (keywords + product_focus).lower():
-                industries.append(v)
+        # Relaxation ladder: try specific query first, loosen only if it returns 0.
+        plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus)
+        per_page = min(max_lc_leads, batch_lead_limit)
+        employees = []
+        chosen = None
+        for attempt in plan:
+            logger.info(f"[LeadContact] Searching — {attempt}")
+            result = lc.search_employees(
+                job_titles=attempt["job_titles"],
+                locations=attempt["locations"],
+                industries=attempt["industries"],
+                keyword=attempt["keyword"],
+                current_titles_only=True,
+                per_page=per_page,
+            )
+            emps = result.get("employees", []) if isinstance(result, dict) else []
+            if emps:
+                employees = emps
+                chosen = attempt
+                break
+            if isinstance(result, dict) and result.get("error"):
+                logger.warning(f"[LeadContact] search error, stopping ladder: {result.get('error')}")
+                break
 
-        # Parse job titles from target_role (comma or semicolon separated)
-        job_titles = [t.strip() for t in re.split(r"[,;]", target_role) if t.strip()]
-
-        # Use keywords to build a search query
-        search_keyword = " ".join(keywords.split(",")[:2]).strip()
-
-        logger.info(
-            f"[LeadContact] Searching — titles={job_titles}, keyword={search_keyword}, "
-            f"locations={target_region[:5] if target_region else 'any'}, industries={industries}"
-        )
-
-        result = lc.search_employees(
-            job_titles=job_titles if job_titles else None,
-            locations=[target_region] if target_region else None,
-            industries=industries if industries else None,
-            keyword=search_keyword if search_keyword else None,
-            current_titles_only=True,
-            per_page=min(max_lc_leads, batch_lead_limit),
-        )
-
-        employees = result.get("employees", [])
         if not employees:
-            logger.info(f"[LeadContact] No employees found for keywords: {search_keyword}")
+            logger.info(f"[LeadContact] No employees found after {len(plan)} query tiers")
             return {"status": "ok", "source": "leadcontact", "new_leads": 0}
+        logger.info(f"[LeadContact] {len(employees)} employees via tier: {chosen}")
 
         new_leads = 0
         for emp in employees:

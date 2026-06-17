@@ -60,6 +60,12 @@ _workflow_search_locks: Dict[int, threading.Lock] = {}
 _workflow_search_locks_guard = threading.Lock()
 _workflow_last_search_at: Dict[int, float] = {}
 _linkedin_cooldown_until = 0.0
+# Per-workflow cooldown for LeadContact search. LeadContact bills per contact
+# returned, not per *new* lead — and the search doesn't paginate, so re-running it
+# returns the same page-1 contacts (all duplicates) and bills again for zero new
+# leads. When a search yields no new leads we back this workflow off so we stop
+# paying for the same data.
+_leadcontact_backoff_until: Dict[int, float] = {}
 MAX_CONSECUTIVE_ERRORS = 5
 
 def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 100000) -> int:
@@ -1428,6 +1434,15 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         "new_leads": 0,
     }
 
+    # Skip (and stop spending) while this workflow is backed off from a prior
+    # search that returned only duplicates / nothing.
+    backoff_until = _leadcontact_backoff_until.get(wf_id, 0.0)
+    if time.time() < backoff_until:
+        remaining = int(backoff_until - time.time())
+        logger.info(f"[LeadContact] workflow #{wf_id} backed off ({remaining}s left); skipping search")
+        stats["status"] = "backoff"
+        return stats
+
     try:
         db = SessionLocal()
         try:
@@ -1467,6 +1482,9 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
 
         if not employees:
             logger.info(f"[LeadContact] No employees found after {len(plan)} query tiers")
+            _leadcontact_backoff_until[wf_id] = time.time() + _int_env(
+                "LEADCONTACT_EMPTY_BACKOFF_SECONDS", 86400, 300, 604800
+            )
             return {"status": "ok", "source": "leadcontact", "new_leads": 0}
         logger.info(f"[LeadContact] {len(employees)} employees via tier: {chosen}")
 
@@ -1537,6 +1555,15 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
 
         stats["new_leads"] = new_leads
         logger.info(f"[LeadContact] Added {new_leads} leads from LeadContact search")
+        if new_leads == 0:
+            # Returned contacts but all were duplicates (no pagination → same page-1
+            # contacts). Back off so we stop re-paying for the same data every cycle.
+            cooldown = _int_env("LEADCONTACT_DEDUP_BACKOFF_SECONDS", 21600, 300, 604800)
+            _leadcontact_backoff_until[wf_id] = time.time() + cooldown
+            logger.warning(
+                f"[LeadContact] workflow #{wf_id}: search returned {len(employees)} contacts "
+                f"but 0 new leads (all duplicates); backing off {cooldown}s to avoid wasted credits"
+            )
     except Exception as e:
         logger.error(f"[LeadContact] Search stage error: {e}")
         stats["status"] = "error"

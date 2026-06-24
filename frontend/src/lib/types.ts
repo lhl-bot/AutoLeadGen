@@ -196,6 +196,7 @@ export interface Workflow {
   auto_followup: boolean
   max_followups: number
   followup_steps?: FollowupStep[] | null
+  template_id?: number | null
   search_offset: number
   enable_linkedin: boolean
   enable_whatsapp: boolean
@@ -397,4 +398,21 @@ export interface OnboardingStatus {
   completed: number
   total: number
   all_done: boolean
+}
+
+export interface EmailTemplate {
+  id: number
+  user_id: number
+  name: string
+  category: string
+  ab_group?: string | null
+  variant_label: string
+  subject?: string | null
+  body: string
+  weight: number
+  is_active: boolean
+  created_at: string
+  sent_count?: number
+  replied_count?: number
+  reply_rate?: number
 }

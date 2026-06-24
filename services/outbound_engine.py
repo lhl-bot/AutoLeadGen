@@ -413,6 +413,7 @@ async def process_workflow(wf_id: int):
             wf_send_interval_max = wf.send_interval_max or 600
             wf_auto_followup = wf.auto_followup
             wf_followup_steps = wf.followup_steps
+            wf_template_id = wf.template_id
             from services.followup_sequence import effective_max_followups
             wf_max_followups = effective_max_followups(wf_followup_steps, wf.max_followups or 3)
             wf_name = wf.name
@@ -714,6 +715,46 @@ async def process_workflow(wf_id: int):
                                 db_v.commit()
                         finally:
                             db_v.close()
+
+                    # 0.3. Template mode: if the workflow uses an email template (A/B group),
+                    # render a variant directly — no research brief or AI credit needed.
+                    if wf_template_id:
+                        template_used = False
+                        db_tpl = SessionLocal()
+                        try:
+                            from models import EmailTemplate
+                            from services.email_templates import pick_variant, render_template
+                            base_tpl = db_tpl.query(EmailTemplate).filter(EmailTemplate.id == wf_template_id).first()
+                            chosen = None
+                            if base_tpl and base_tpl.ab_group:
+                                variants = db_tpl.query(EmailTemplate).filter(
+                                    EmailTemplate.user_id == base_tpl.user_id,
+                                    EmailTemplate.ab_group == base_tpl.ab_group,
+                                    EmailTemplate.is_active.is_(True),
+                                ).all()
+                                chosen = pick_variant(variants) or (base_tpl if base_tpl.is_active else None)
+                            elif base_tpl and base_tpl.is_active:
+                                chosen = base_tpl
+
+                            if chosen:
+                                lead_obj = db_tpl.query(Lead).filter(Lead.id == lead_id).first()
+                                if lead_obj:
+                                    rendered = render_template(chosen, lead_obj)
+                                    subject = rendered["subject"].strip()
+                                    body = rendered["body"].strip()
+                                    lead_obj.ai_draft = f"Subject: {subject}\n\n{body}" if subject else body
+                                    lead_obj.status = "drafted"
+                                    lead_obj.template_id = chosen.id
+                                    lead_obj.template_variant = chosen.variant_label
+                                    db_tpl.commit()
+                                    template_used = True
+                                    logger.info(f"Template draft (variant {chosen.variant_label}) for {email} (workflow: {wf_name})")
+                        finally:
+                            db_tpl.close()
+                        # Template produced the draft → skip research + AI for this lead.
+                        # If the template was missing/inactive, fall through to AI generation.
+                        if template_used:
+                            return
 
                     # 1. Generate Deep Research Brief
                     await build_and_save_lead_brief(lead_id, domain)

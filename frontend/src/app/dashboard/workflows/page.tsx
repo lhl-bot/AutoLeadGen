@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from '@/lib/i18n';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import type { ClientPool, CustomerPersona, EmailAccount, Workflow, PlaybookPreset } from '@/lib/types';
+import type { ClientPool, CustomerPersona, EmailAccount, EmailTemplate, Workflow, PlaybookPreset } from '@/lib/types';
 
 interface FollowupStepForm {
   day_offset: number
@@ -49,6 +49,7 @@ interface WorkflowForm {
   auto_followup: boolean
   max_followups: number
   followup_steps: FollowupStepForm[]
+  template_id: string
   search_offset: number
   email_account_ids: number[]
   enable_linkedin: boolean
@@ -82,6 +83,7 @@ const defaultWorkflowForm: WorkflowForm = {
   auto_followup: false,
   max_followups: 3,
   followup_steps: [],
+  template_id: 'none',
   search_offset: 0,
   email_account_ids: [],
   enable_linkedin: false,
@@ -123,6 +125,7 @@ function workflowToForm(workflow: Workflow): WorkflowForm {
       day_offset: s.day_offset,
       instruction: s.instruction || '',
     })),
+    template_id: workflow.template_id ? workflow.template_id.toString() : 'none',
     search_offset: workflow.search_offset || 0,
     email_account_ids: workflow.emails?.map(email => email.id) || [],
     enable_linkedin: Boolean(workflow.enable_linkedin),
@@ -153,6 +156,7 @@ export default function WorkflowsPage() {
   const [pools, setPools] = useState<ClientPool[]>([]);
   const [personas, setPersonas] = useState<CustomerPersona[]>([]);
   const [emails, setEmails] = useState<EmailAccount[]>([]);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [dependenciesLoaded, setDependenciesLoaded] = useState(false);
   const [isDependenciesLoading, setIsDependenciesLoading] = useState(false);
 
@@ -199,14 +203,16 @@ export default function WorkflowsPage() {
     if (dependenciesLoaded || isDependenciesLoading) return;
     setIsDependenciesLoading(true);
     try {
-      const [poolsRes, personasRes, emailsRes] = await Promise.all([
+      const [poolsRes, personasRes, emailsRes, templatesRes] = await Promise.all([
         apiFetch('/api/client_pools/'),
         apiFetch('/api/personas/'),
-        apiFetch('/api/email_accounts/')
+        apiFetch('/api/email_accounts/'),
+        apiFetch('/api/email_templates/')
       ]);
       if (poolsRes.ok) setPools(await poolsRes.json());
       if (personasRes.ok) setPersonas(await personasRes.json());
       if (emailsRes.ok) setEmails(await emailsRes.json());
+      if (templatesRes.ok) setTemplates(await templatesRes.json());
       setDependenciesLoaded(true);
     } catch (e) {
       console.error('Failed to fetch dependencies', e);
@@ -326,6 +332,7 @@ export default function WorkflowsPage() {
           instruction: s.instruction.trim() || null,
         }))
       : null,
+    template_id: formData.template_id === 'none' ? null : parseInt(formData.template_id),
     search_offset: Number(formData.search_offset) || 0,
     linkedin_daily_limit: Number(formData.linkedin_daily_limit) || 20,
   });
@@ -771,6 +778,27 @@ export default function WorkflowsPage() {
                       <Input type="number" required value={formData.max_followups} onChange={e => setFormData({...formData, max_followups: parseInt(e.target.value) || 3})} />
                     </div>
                   </div>
+
+                  {/* Cold-email source: AI generation vs reusable template (A/B) */}
+                  <div className="mt-4 space-y-2">
+                    <Label>{t('Cold Email Source')}</Label>
+                    <select
+                      value={formData.template_id}
+                      onChange={e => setFormData({ ...formData, template_id: e.target.value })}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="none">{t('AI generation (personalized per lead)')}</option>
+                      {templates.map(tpl => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.name}{tpl.ab_group ? ` · A/B: ${tpl.ab_group} (${tpl.variant_label})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      {t('Using a template skips AI generation and research for cold emails. Pick any variant of an A/B group to enable the split.')}
+                    </p>
+                  </div>
+
                   <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
                     {t('Auto Follow-up')} ({t('AI drafts follow-ups for review')})

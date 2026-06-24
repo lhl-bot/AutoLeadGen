@@ -25,6 +25,7 @@ import {
   UserCog,
   LogOut,
   WalletCards,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
@@ -147,6 +148,7 @@ export default function DashboardLayout({
     { name: t('Review Center'), href: '/dashboard/review', icon: MailCheck, section: 'WORKSPACE' },
     { name: t('Personas'), href: '/dashboard/personas', icon: Users, section: 'WORKSPACE' },
     { name: t('Workflows'), href: '/dashboard/workflows', icon: Briefcase, section: 'WORKSPACE' },
+    { name: t('Templates'), href: '/dashboard/templates', icon: FileText, section: 'WORKSPACE' },
     { name: t('Email Config'), href: '/dashboard/emails', icon: Mail, section: 'WORKSPACE' },
     { name: t('Omnichannel'), href: '/dashboard/settings', icon: Settings, section: 'WORKSPACE' },
     ...(isAdmin ? [{ name: t('Users'), href: '/dashboard/users', icon: UserCog, section: 'WORKSPACE' }] : []),

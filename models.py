@@ -73,6 +73,7 @@ class Workflow(Base):
     auto_followup = Column(Boolean, default=False)
     max_followups = Column(Integer, default=3)
     followup_steps = Column(JSON, nullable=True, doc="Ordered cold follow-up sequence: [{day_offset, instruction?}]. Overrides max_followups + global interval when set.")
+    template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, doc="When set, cold drafts use this template (A/B group) instead of pure AI generation")
     search_offset = Column(Integer, default=0)
     
     # Playbook & warmup settings
@@ -200,6 +201,10 @@ class Lead(Base):
     linkedin_status = Column(String(50), default="unconnected") # unconnected, requested, connected, invalid_profile, provider_limited, failed
     linkedin_sent = Column(Boolean, default=False)
     whatsapp_sent = Column(Boolean, default=False)
+
+    # A/B template attribution for the most recent template-based draft/send.
+    template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, index=True)
+    template_variant = Column(String(20), nullable=True, doc="Variant label of the template used, e.g. A/B")
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -294,6 +299,32 @@ class CreditTransaction(Base):
     wallet = relationship("CreditWallet", back_populates="transactions")
     user = relationship("User", foreign_keys=[user_id])
     created_by = relationship("User", foreign_keys=[created_by_user_id])
+
+
+class EmailTemplate(Base):
+    """Reusable outreach template with {{variable}} placeholders and A/B variants.
+
+    Variants are grouped by ``ab_group``; when a workflow points at any template in
+    a group, the engine picks an active variant by ``weight`` and records which one
+    was used on the lead for per-variant reply-rate reporting.
+    """
+    __tablename__ = "email_templates"
+    __table_args__ = (
+        Index("ix_email_templates_user_group", "user_id", "ab_group"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    category = Column(String(50), default="cold", doc="cold, followup")
+    ab_group = Column(String(100), nullable=True, index=True, doc="Groups A/B variants; null = standalone")
+    variant_label = Column(String(20), default="A", doc="A, B, C ...")
+    subject = Column(String(500), nullable=True)
+    body = Column(Text, nullable=False)
+    weight = Column(Integer, default=1, doc="Relative A/B split weight")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class SnovioUsageEvent(Base):

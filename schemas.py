@@ -101,6 +101,7 @@ class WorkflowBase(BaseModel):
     auto_followup: bool = False
     max_followups: int = 3
     followup_steps: Optional[List[FollowupStep]] = Field(default=None, max_length=6)
+    template_id: Optional[int] = None
     search_offset: int = 0
 
     @field_validator("followup_steps")
@@ -308,3 +309,54 @@ class CreditGrantRequest(BaseModel):
 class CreditLedgerResponse(BaseModel):
     summary: CreditSummary
     transactions: List[CreditTransaction]
+
+
+# --- Email Templates (A/B testing) ---
+class EmailTemplateBase(BaseModel):
+    name: str
+    category: str = "cold"
+    ab_group: Optional[str] = None
+    variant_label: str = "A"
+    subject: Optional[str] = None
+    body: str
+    weight: int = Field(default=1, ge=0, le=100)
+    is_active: bool = True
+
+    @field_validator("name", "body")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip()
+
+    @field_validator("ab_group", "variant_label", "subject")
+    @classmethod
+    def _trim_optional(cls, v):
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+
+class EmailTemplateCreate(EmailTemplateBase):
+    pass
+
+
+class EmailTemplate(EmailTemplateBase):
+    id: int
+    user_id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EmailTemplateStats(EmailTemplate):
+    # Reply-rate attribution derived from leads that used this template.
+    sent_count: int = 0
+    replied_count: int = 0
+    reply_rate: float = 0.0
+
+
+class TemplatePreviewRequest(BaseModel):
+    subject: Optional[str] = None
+    body: str

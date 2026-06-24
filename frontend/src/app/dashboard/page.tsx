@@ -99,7 +99,7 @@ export default function DashboardOverview() {
       <OnboardingChecklist />
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{t('Loading analytics...')}</div>
+        <div className="py-20 text-center text-slate-500">{t('Loading analytics...')}</div>
       ) : (
         <>
           {/* ── AI Daily Work Report ── */}
@@ -174,7 +174,7 @@ export default function DashboardOverview() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.1 }}
-                className="glass-panel group relative overflow-hidden rounded-lg border border-white/5 p-5 transition-transform hover:-translate-y-0.5"
+                className="glass-panel group relative overflow-hidden rounded-lg border border-slate-200 p-5 transition-transform hover:-translate-y-0.5"
               >
                 <div className="flex justify-between items-start mb-5">
                   <div className="rounded-lg bg-slate-50 p-2.5 ring-1 ring-slate-200/70">
@@ -197,7 +197,7 @@ export default function DashboardOverview() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.3 }}
-                className="glass-panel rounded-lg border border-white/5 p-5 sm:p-6 lg:col-span-2"
+                className="glass-panel rounded-lg border border-slate-200 p-5 sm:p-6 lg:col-span-2"
               >
               <h2 className="mb-6 flex items-center gap-2 text-lg font-semibold text-slate-950">
                 <TrendingUp className="w-5 h-5 text-indigo-500" /> {t('Performance Trends (14 Days)')}
@@ -242,7 +242,7 @@ export default function DashboardOverview() {
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.4 }}
-                className="glass-panel relative flex flex-col overflow-hidden rounded-lg border border-white/5 p-5 sm:p-6"
+                className="glass-panel relative flex flex-col overflow-hidden rounded-lg border border-slate-200 p-5 sm:p-6"
               >
               <div>
                 <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-950">
@@ -250,10 +250,10 @@ export default function DashboardOverview() {
                 </h2>
                 <div className="space-y-3 relative z-10">
                   {/* 1. Database Connection */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Database Connection')}</div>
-                      <div className="text-xs text-gray-400">{t('MySQL Enterprise DB')}</div>
+                      <div className="text-xs text-slate-500">{t('MySQL Enterprise DB')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.database === 'online' ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
@@ -264,15 +264,15 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 2. Outbound Engine */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Outbound Engine')}</div>
-                      <div className="text-xs text-gray-400">{health ? `${health.active_workflows} active · ${health.recent_emails_30m} sent/30m` : t('Background workers')}</div>
+                      <div className="text-xs text-slate-500">{health ? `${health.active_workflows} active · ${health.recent_emails_30m} sent/30m` : t('Background workers')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.outbound_engine_thread === 'running'
                         ? health?.outbound_engine === 'active' ? 'text-emerald-500 bg-emerald-500/10' : 'text-amber-500 bg-amber-500/10'
-                        : health?.outbound_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                        : health?.outbound_engine_thread === 'disabled' ? 'text-slate-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
                       <div className={`w-2 h-2 rounded-full ${
                         health?.outbound_engine_thread === 'running'
@@ -287,15 +287,15 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 3. Prospecting Engine */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Prospecting Engine')}</div>
-                      <div className="text-xs text-gray-400">{t('Automated lead sourcing')}</div>
+                      <div className="text-xs text-slate-500">{t('Automated lead sourcing')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.prospecting_engine_thread === 'running'
                         ? 'text-emerald-500 bg-emerald-500/10'
-                        : health?.prospecting_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                        : health?.prospecting_engine_thread === 'disabled' ? 'text-slate-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
                       <div className={`w-2 h-2 rounded-full ${
                         health?.prospecting_engine_thread === 'running'
@@ -310,15 +310,15 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 4. Inbox Monitor */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Inbox Monitor')}</div>
-                      <div className="text-xs text-gray-400">{t('Reply detection daemon')}</div>
+                      <div className="text-xs text-slate-500">{t('Reply detection daemon')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.inbox_monitor_thread === 'running'
                         ? 'text-emerald-500 bg-emerald-500/10'
-                        : health?.inbox_monitor_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                        : health?.inbox_monitor_thread === 'disabled' ? 'text-slate-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
                       <div className={`w-2 h-2 rounded-full ${
                         health?.inbox_monitor_thread === 'running'
@@ -333,15 +333,15 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 5. Omnichannel Router */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Omnichannel Router')}</div>
-                      <div className="text-xs text-gray-400">{t('WhatsApp/LinkedIn router')}</div>
+                      <div className="text-xs text-slate-500">{t('WhatsApp/LinkedIn router')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.omnichannel_engine_thread === 'running'
                         ? 'text-emerald-500 bg-emerald-500/10'
-                        : health?.omnichannel_engine_thread === 'disabled' ? 'text-gray-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
+                        : health?.omnichannel_engine_thread === 'disabled' ? 'text-slate-500 bg-gray-500/10' : 'text-rose-500 bg-rose-500/10'
                     }`}>
                       <div className={`w-2 h-2 rounded-full ${
                         health?.omnichannel_engine_thread === 'running'
@@ -356,10 +356,10 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 6. Research Agent */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Research Agent')}</div>
-                      <div className="text-xs text-gray-400">{health?.llm_api_configured ? t('DeepSeek LLM Models') : 'LLM not configured'}</div>
+                      <div className="text-xs text-slate-500">{health?.llm_api_configured ? t('DeepSeek LLM Models') : 'LLM not configured'}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.llm_api_configured ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
@@ -370,10 +370,10 @@ export default function DashboardOverview() {
                   </div>
 
                   {/* 7. Unipile Integration */}
-                  <div className="p-3 bg-black/40 rounded-lg border border-white/5 flex justify-between items-center gap-3">
+                  <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex justify-between items-center gap-3">
                     <div>
                       <div className="font-semibold text-slate-900">{t('Unipile Integration')}</div>
-                      <div className="text-xs text-gray-400">{health ? `${health.unipile_accounts} ${t('accounts connected')}` : t('Omnichannel webhooks')}</div>
+                      <div className="text-xs text-slate-500">{health ? `${health.unipile_accounts} ${t('accounts connected')}` : t('Omnichannel webhooks')}</div>
                     </div>
                     <div className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full ${
                       health?.unipile_status === 'online' ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10'
@@ -385,11 +385,11 @@ export default function DashboardOverview() {
                 </div>
               </div>
               
-              <div className="mt-6 pt-6 border-t border-white/10 relative z-10">
-                <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+              <div className="mt-6 pt-6 border-t border-slate-200 relative z-10">
+                <h3 className="text-sm font-medium text-slate-500 mb-3 flex items-center gap-2">
                   <Zap className="w-4 h-4 text-indigo-500" /> {t('Quick Start')}
                 </h3>
-                <ul className="space-y-2 text-sm text-gray-300">
+                <ul className="space-y-2 text-sm text-slate-600">
                   <li className="flex gap-2"><span className="text-indigo-500">1.</span> {t('Configure emails & personas')}</li>
                   <li className="flex gap-2"><span className="text-indigo-500">2.</span> {t('Create a workflow')}</li>
                   <li className="flex gap-2"><span className="text-indigo-500">3.</span> {t('Let the AI start hunting')}</li>

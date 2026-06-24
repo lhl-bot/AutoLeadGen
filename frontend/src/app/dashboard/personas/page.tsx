@@ -278,7 +278,7 @@ export default function PersonasPage() {
                           }}
                           className={cn(
                             'rounded-md border px-3 py-1.5 text-sm transition-colors',
-                            on ? 'border-indigo-500 bg-indigo-500/10 text-indigo-600' : 'border-white/20 text-gray-400 hover:bg-white/5'
+                            on ? 'border-indigo-500 bg-indigo-500/10 text-indigo-600' : 'border-white/20 text-gray-400 hover:bg-slate-50'
                           )}
                           aria-pressed={on}
                         >
@@ -434,7 +434,7 @@ export default function PersonasPage() {
                     </div>
                   )}
                   {persona.ai_prompt_template && (
-                    <div className="mt-4 p-3 bg-white/5 border-l-2 border-indigo-500 rounded text-gray-300 text-xs">
+                    <div className="mt-4 p-3 bg-slate-50 border-l-2 border-indigo-500 rounded text-gray-300 text-xs">
                       <strong>{t('AI Prompt Template')}:</strong> {persona.ai_prompt_template}
                     </div>
                   )}

@@ -29,9 +29,9 @@ function statusClasses(status: string): string {
     case 'drafted': return 'bg-indigo-500/20 text-indigo-500';
     case 'send_failed': return 'bg-rose-500/20 text-rose-500';
     case 'rejected':
-    case 'unsubscribed': return 'bg-gray-500/20 text-gray-500';
+    case 'unsubscribed': return 'bg-gray-500/20 text-slate-500';
     case 'needs_email': return 'bg-amber-500/20 text-amber-600';
-    default: return 'bg-gray-500/20 text-gray-400';
+    default: return 'bg-gray-500/20 text-slate-500';
   }
 }
 
@@ -40,7 +40,7 @@ function gradeClasses(grade?: string | null): string {
     case 'A': return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
     case 'B': return 'bg-sky-500/10 text-sky-400 border-sky-500/20';
     case 'C': return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
-    default: return 'bg-gray-500/10 text-gray-400 border-gray-500/20';
+    default: return 'bg-gray-500/10 text-slate-500 border-gray-500/20';
   }
 }
 
@@ -161,9 +161,9 @@ export default function LeadsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Workspace')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Leads')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Every lead across all workflows and pools, searchable in one place.')}</p>
+          <p className="mt-2 text-sm text-slate-500">{t('Every lead across all workflows and pools, searchable in one place.')}</p>
         </div>
-        <Button onClick={fetchLeads} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+        <Button onClick={fetchLeads} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
           <RefreshCw className="w-4 h-4" /> {t('Refresh')}
         </Button>
       </div>
@@ -172,7 +172,7 @@ export default function LeadsPage() {
       <div className="glass-panel mb-5 rounded-lg p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <form onSubmit={submitSearch} className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <Input
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -197,7 +197,7 @@ export default function LeadsPage() {
             {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           {filtersActive && (
-            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1 text-gray-500">
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1 text-slate-500">
               <X className="h-3.5 w-3.5" /> {t('Clear')}
             </Button>
           )}
@@ -219,7 +219,7 @@ export default function LeadsPage() {
           ))}
         </div>
       ) : leads.length === 0 ? (
-        <div className="glass-panel rounded-lg border border-dashed border-white/20 p-12 text-center text-gray-400">
+        <div className="glass-panel rounded-lg border border-dashed border-slate-300 p-12 text-center text-slate-500">
           <Database className="mx-auto mb-4 h-12 w-12 opacity-50" />
           <p className="mb-1 font-medium text-white">{filtersActive ? t('No leads match these filters') : t('No leads yet')}</p>
           <p className="text-sm">
@@ -254,8 +254,8 @@ export default function LeadsPage() {
                           </Badge>
                         )}
                       </button>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
-                        {name && <span className="text-gray-500">{name}{lead.job_title ? ` · ${lead.job_title}` : ''}</span>}
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        {name && <span className="text-slate-500">{name}{lead.job_title ? ` · ${lead.job_title}` : ''}</span>}
                         {lead.email ? (
                           <span className="inline-flex items-center gap-1">
                             {lead.email_verified ? <MailCheck className="h-3 w-3 text-emerald-500" /> : <Mail className="h-3 w-3" />}
@@ -264,10 +264,10 @@ export default function LeadsPage() {
                         ) : (
                           <span className="text-amber-600">{t('No email')}</span>
                         )}
-                        {lead.source_channel && <span className="text-gray-500">· {lead.source_channel}</span>}
+                        {lead.source_channel && <span className="text-slate-500">· {lead.source_channel}</span>}
                       </div>
                       {lead.qualification_notes && (
-                        <p className="mt-1.5 line-clamp-1 text-xs italic text-gray-500" title={lead.qualification_notes}>
+                        <p className="mt-1.5 line-clamp-1 text-xs italic text-slate-500" title={lead.qualification_notes}>
                           {lead.qualification_notes}
                         </p>
                       )}
@@ -283,7 +283,7 @@ export default function LeadsPage() {
                         disabled={ratingId === lead.id}
                         title={t('Good lead')}
                         className={cn('inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors',
-                          lead.user_rating === 'positive' ? 'bg-emerald-500/20 text-emerald-500' : 'text-gray-400 hover:bg-emerald-500/10 hover:text-emerald-500')}
+                          lead.user_rating === 'positive' ? 'bg-emerald-500/20 text-emerald-500' : 'text-slate-500 hover:bg-emerald-500/10 hover:text-emerald-500')}
                       >
                         <ThumbsUp className="h-4 w-4" />
                       </button>
@@ -292,14 +292,14 @@ export default function LeadsPage() {
                         disabled={ratingId === lead.id}
                         title={t('Poor lead')}
                         className={cn('inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors',
-                          lead.user_rating === 'negative' ? 'bg-rose-500/20 text-rose-500' : 'text-gray-400 hover:bg-rose-500/10 hover:text-rose-500')}
+                          lead.user_rating === 'negative' ? 'bg-rose-500/20 text-rose-500' : 'text-slate-500 hover:bg-rose-500/10 hover:text-rose-500')}
                       >
                         <ThumbsDown className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => openDetail(lead)}
                         title={t('Details')}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-indigo-500/10 hover:text-indigo-500"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-indigo-500/10 hover:text-indigo-500"
                       >
                         <FileText className="h-4 w-4" />
                       </button>
@@ -312,7 +312,7 @@ export default function LeadsPage() {
 
           {/* Pagination */}
           <div className="mt-5 flex items-center justify-between">
-            <span className="text-xs text-gray-400">
+            <span className="text-xs text-slate-500">
               {t('Showing')} {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + leads.length}
             </span>
             <div className="flex items-center gap-2">
@@ -375,29 +375,29 @@ export default function LeadsPage() {
                 {detailLead.qualification_notes && (
                   <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-sky-500">{t('Why this score')}</p>
-                    <p className="text-gray-300">{detailLead.qualification_notes}</p>
+                    <p className="text-slate-700">{detailLead.qualification_notes}</p>
                   </div>
                 )}
 
                 {detailLead.ai_draft && (
                   <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3">
                     <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-500">{t('AI draft')}</p>
-                    <pre className="whitespace-pre-wrap font-sans text-gray-300">{detailLead.ai_draft}</pre>
+                    <pre className="whitespace-pre-wrap font-sans text-slate-700">{detailLead.ai_draft}</pre>
                   </div>
                 )}
 
                 <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">{t('AI research brief')}</p>
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t('AI research brief')}</p>
                   {briefLoading ? (
-                    <div className="flex items-center gap-2 text-gray-400"><Loader2 className="h-4 w-4 animate-spin" /> {t('Loading...')}</div>
+                    <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> {t('Loading...')}</div>
                   ) : brief ? (
-                    <div className="space-y-2 text-gray-300">
+                    <div className="space-y-2 text-slate-700">
                       {brief.company_overview && <p>{brief.company_overview}</p>}
-                      {brief.pain_points && <p><span className="text-gray-400">{t('Pain points')}: </span>{brief.pain_points}</p>}
-                      {brief.personalization_hook && <p><span className="text-gray-400">{t('Hook')}: </span>{brief.personalization_hook}</p>}
+                      {brief.pain_points && <p><span className="text-slate-500">{t('Pain points')}: </span>{brief.pain_points}</p>}
+                      {brief.personalization_hook && <p><span className="text-slate-500">{t('Hook')}: </span>{brief.personalization_hook}</p>}
                     </div>
                   ) : (
-                    <p className="text-gray-500">{t('No research brief for this lead yet.')}</p>
+                    <p className="text-slate-500">{t('No research brief for this lead yet.')}</p>
                   )}
                 </div>
               </div>
@@ -412,8 +412,8 @@ export default function LeadsPage() {
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs text-gray-400">{label}</p>
-      <p className="truncate text-gray-200" title={value}>{value}</p>
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="truncate text-slate-700" title={value}>{value}</p>
     </div>
   );
 }

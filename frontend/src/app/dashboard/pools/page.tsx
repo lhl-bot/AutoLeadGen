@@ -519,10 +519,10 @@ export default function PoolsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Workspace', '工作区')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{txt('Client Pools', '客户池')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{txt('Manage your target audiences and deduplicate leads automatically.', '管理您的目标客户群体并自动去重联系人。')}</p>
+          <p className="mt-2 text-sm text-slate-500">{txt('Manage your target audiences and deduplicate leads automatically.', '管理您的目标客户群体并自动去重联系人。')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button onClick={fetchPools} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <Button onClick={fetchPools} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
             <RefreshCw className="w-4 h-4" /> {txt('Refresh', '刷新')}
           </Button>
 
@@ -567,9 +567,9 @@ export default function PoolsPage() {
       )}
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{txt('Loading pools...', '正在加载客户池...')}</div>
+        <div className="py-20 text-center text-slate-500">{txt('Loading pools...', '正在加载客户池...')}</div>
       ) : pools.length === 0 ? (
-        <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
+        <div className="glass-panel p-12 text-center text-slate-500 rounded-lg border border-dashed border-slate-300">
           <Database className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>{txt('No client pools created yet. Click "New Pool" to get started.', '暂无已创建的客户池。点击“新建客户池”开始吧。')}</p>
         </div>
@@ -585,32 +585,32 @@ export default function PoolsPage() {
                 <div className="flex justify-between items-start mb-2">
                   <h3 className="font-bold text-lg text-white">{pool.name}</h3>
                   <div className="flex items-center gap-2">
-                    <button onClick={(e) => openImportDialog(e, pool)} className="text-gray-500 hover:text-indigo-500 transition-colors z-10" title={txt('Import CSV', '导入 CSV')}>
+                    <button onClick={(e) => openImportDialog(e, pool)} className="text-slate-500 hover:text-indigo-500 transition-colors z-10" title={txt('Import CSV', '导入 CSV')}>
                       <Upload className="w-4 h-4" />
                     </button>
-                    <button onClick={(e) => startPoolSearch(e, pool)} disabled={searchingPoolId === pool.id} className="text-gray-500 hover:text-emerald-500 disabled:opacity-50 transition-colors z-10" title={txt('Search leads now', '立即搜索联系人')}>
+                    <button onClick={(e) => startPoolSearch(e, pool)} disabled={searchingPoolId === pool.id} className="text-slate-500 hover:text-emerald-500 disabled:opacity-50 transition-colors z-10" title={txt('Search leads now', '立即搜索联系人')}>
                       <Search className="w-4 h-4" />
                     </button>
-                    <button onClick={(e) => openDeleteDialog(e, pool.id)} className="text-gray-500 hover:text-rose-500 transition-colors z-10" title={txt('Delete pool', '删除客户库')}>
+                    <button onClick={(e) => openDeleteDialog(e, pool.id)} className="text-slate-500 hover:text-rose-500 transition-colors z-10" title={txt('Delete pool', '删除客户库')}>
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
-                <p className="text-sm text-gray-400 mb-4">{pool.description || txt('No description provided.', '暂无描述。')}</p>
+                <p className="text-sm text-slate-500 mb-4">{pool.description || txt('No description provided.', '暂无描述。')}</p>
                 {pool.excluded_domains && (
                   <div className="text-xs text-rose-400/80 bg-rose-400/10 inline-block px-2 py-1 rounded mb-4">
                     {txt('Excluded: ', '已排除: ')}{pool.excluded_domains}
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10">
+              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-200">
                 <div>
                   <div className="text-2xl font-bold text-slate-900">{pool.total_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Total Leads', '总线索')}</div>
+                  <div className="text-xs text-slate-500 uppercase tracking-wider">{txt('Total Leads', '总线索')}</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-indigo-500">{pool.contacted_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Contacted', '已联系')}</div>
+                  <div className="text-xs text-slate-500 uppercase tracking-wider">{txt('Contacted', '已联系')}</div>
                 </div>
               </div>
             </div>

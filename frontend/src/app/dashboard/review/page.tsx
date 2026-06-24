@@ -343,7 +343,7 @@ export default function ReviewQueuePage() {
                 key={lead.id}
                 className={cn(
                   'mb-1 flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
-                  lead.id === selectedId ? 'bg-indigo-500/15' : 'hover:bg-white/5',
+                  lead.id === selectedId ? 'bg-indigo-500/15' : 'hover:bg-slate-50',
                 )}
               >
                 <input

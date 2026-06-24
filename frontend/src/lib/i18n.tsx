@@ -17,7 +17,9 @@ export const translations: Record<Language, Record<string, string>> = {
   en: {
     // Navigation / Sidebar
     'WORKSPACE': 'WORKSPACE',
+    'OUTREACH': 'OUTREACH',
     'ASSISTANT': 'ASSISTANT',
+    'SETTINGS': 'SETTINGS',
     'REPORTS': 'REPORTS',
     'Overview': 'Overview',
     'Client Pools': 'Client Pools',
@@ -470,7 +472,9 @@ export const translations: Record<Language, Record<string, string>> = {
   zh: {
     // Navigation / Sidebar
     'WORKSPACE': '工作区',
+    'OUTREACH': '触达',
     'ASSISTANT': 'AI 助手',
+    'SETTINGS': '配置',
     'REPORTS': '数据报表',
     'Overview': '数据概览',
     'Client Pools': '客户池',

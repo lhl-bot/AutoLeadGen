@@ -190,10 +190,10 @@ export default function EmailsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Channels')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Sender Emails')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Configure SMTP/IMAP accounts for rotating cold emails.')}</p>
+          <p className="mt-2 text-sm text-slate-500">{t('Configure SMTP/IMAP accounts for rotating cold emails.')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button onClick={fetchEmails} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <Button onClick={fetchEmails} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
             <RefreshCw className="w-4 h-4" /> {t('Refresh')}
           </Button>
 
@@ -267,9 +267,9 @@ export default function EmailsPage() {
       </div>
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{t('Loading email accounts...')}</div>
+        <div className="py-20 text-center text-slate-500">{t('Loading email accounts...')}</div>
       ) : emails.length === 0 ? (
-        <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
+        <div className="glass-panel p-12 text-center text-slate-500 rounded-lg border border-dashed border-slate-300">
           <Mail className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>{t('No email accounts added yet.')}</p>
         </div>
@@ -281,16 +281,16 @@ export default function EmailsPage() {
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-lg text-white">{email.email}</h3>
-                    {email.display_name && <span className="text-xs text-gray-400">({email.display_name})</span>}
+                    {email.display_name && <span className="text-xs text-slate-500">({email.display_name})</span>}
                   </div>
-                  <button onClick={() => openDeleteDialog(email.id)} className="text-gray-500 hover:text-red-400 transition-colors">
+                  <button onClick={() => openDeleteDialog(email.id)} className="text-slate-500 hover:text-red-400 transition-colors">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="space-y-2 mt-4 pt-4 border-t border-white/10 text-sm text-gray-300">
+                <div className="space-y-2 mt-4 pt-4 border-t border-slate-200 text-sm text-slate-700">
                   <div className="flex items-center gap-2">
-                    <div className="w-16 text-gray-500">SMTP</div>
+                    <div className="w-16 text-slate-500">SMTP</div>
                     <div className="flex-1 font-mono text-xs">{email.smtp_host}:{email.smtp_port}</div>
                     {smtpStatus[email.id] ? (
                       smtpStatus[email.id].success ? (
@@ -311,7 +311,7 @@ export default function EmailsPage() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="w-16 text-gray-500">IMAP</div>
+                    <div className="w-16 text-slate-500">IMAP</div>
                     <div className="flex-1 font-mono text-xs">{email.imap_host || t('Not Configured')}:{email.imap_port}</div>
                     {imapStatus[email.id] ? (
                       imapStatus[email.id].success ? (

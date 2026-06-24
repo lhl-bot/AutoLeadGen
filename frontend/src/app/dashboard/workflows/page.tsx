@@ -516,7 +516,7 @@ export default function WorkflowsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Automation')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Workflows')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Set up automated pipelines for prospecting and outreach.')}</p>
+          <p className="mt-2 text-sm text-slate-500">{t('Set up automated pipelines for prospecting and outreach.')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
           <Dialog open={isLogsOpen} onOpenChange={(open) => {
@@ -524,7 +524,7 @@ export default function WorkflowsPage() {
             if (open) loadEngineLogs();
           }}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="gap-2 bg-black/40 text-gray-300 border-white/20 hover:bg-black/60 hover:text-white">
+              <Button variant="outline" className="gap-2 bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100 hover:text-slate-900">
                 <ScrollText className="w-4 h-4" /> {t('Engine Logs')}
               </Button>
             </DialogTrigger>
@@ -543,7 +543,7 @@ export default function WorkflowsPage() {
             </DialogContent>
           </Dialog>
 
-          <Button onClick={fetchWorkflows} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <Button onClick={fetchWorkflows} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
             <RefreshCw className="w-4 h-4" /> {t('Refresh')}
           </Button>
 
@@ -959,9 +959,9 @@ export default function WorkflowsPage() {
       )}
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{t('Loading workflows...')}</div>
+        <div className="py-20 text-center text-slate-500">{t('Loading workflows...')}</div>
       ) : workflows.length === 0 ? (
-        <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
+        <div className="glass-panel p-12 text-center text-slate-500 rounded-lg border border-dashed border-slate-300">
           <Briefcase className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>{t('No workflows created yet.')} {t('Create your first workflow to start finding leads.')}</p>
         </div>
@@ -971,22 +971,22 @@ export default function WorkflowsPage() {
             const isActive = wf.status === 'active';
             const sources = (wf.search_sources || 'web').split(',').map(item => item.trim()).filter(Boolean);
             return (
-              <div key={wf.id} className={`glass-panel p-5 rounded-lg flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between transition-all ${isActive ? 'border-indigo-500/50 shadow-[0_12px_32px_rgba(79,70,229,0.12)]' : 'border-white/5 opacity-80'}`}>
+              <div key={wf.id} className={`glass-panel p-5 rounded-lg flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between transition-all ${isActive ? 'border-indigo-500/50 shadow-[0_12px_32px_rgba(79,70,229,0.12)]' : 'border-slate-200 opacity-80'}`}>
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
                     <h3 className="font-bold text-lg text-white">{wf.name}</h3>
-                    <Badge variant="outline" className={isActive ? 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50' : 'text-gray-400 border-gray-600'}>
+                    <Badge variant="outline" className={isActive ? 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50' : 'text-slate-500 border-gray-600'}>
                       {isActive ? t('Active') : t('Paused')}
                     </Badge>
                   </div>
-                  <div className="text-sm text-gray-400 mb-3 flex items-center gap-2">
+                  <div className="text-sm text-slate-500 mb-3 flex items-center gap-2">
                     <Search className="h-4 w-4 text-indigo-500" />
                     {wf.search_keywords || '—'}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
                     {wf.client_pool_name && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-300">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-700">
                         <Database className="h-3.5 w-3.5" /> {wf.client_pool_name}
                       </span>
                     )}
@@ -1017,7 +1017,7 @@ export default function WorkflowsPage() {
                       </span>
                     )}
                     {wf.playbook_type && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-300">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-700">
                         {wf.playbook_type}
                       </span>
                     )}
@@ -1047,23 +1047,23 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-4 border-t border-white/10 pt-4 xl:ml-6 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
+                <div className="flex flex-col gap-4 border-t border-slate-200 pt-4 xl:ml-6 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
                   <div className="grid grid-cols-4 gap-5 text-center">
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-white">{wf.leads_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Total')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Total')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-emerald-400">{wf.contactable_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Contactable')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Contactable')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-amber-400">{wf.needs_email_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Needs Email')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Needs Email')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-orange-400">{wf.low_score_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Low Score')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Low Score')}</span>
                     </div>
                   </div>
 
@@ -1071,7 +1071,7 @@ export default function WorkflowsPage() {
                     <Button
                       onClick={() => openEditDialog(wf)}
                       variant="outline"
-                      className="gap-2 w-24 bg-transparent border-white/20 text-gray-200 hover:bg-white/10"
+                      className="gap-2 w-24 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
                     >
                       <Pencil className="w-4 h-4" /> {t('Edit')}
                     </Button>
@@ -1079,7 +1079,7 @@ export default function WorkflowsPage() {
                       onClick={() => startWorkflowSearch(wf.id)}
                       disabled={searchingWorkflowId === wf.id}
                       variant="outline"
-                      className="gap-2 w-32 bg-transparent border-white/20 text-gray-200 hover:bg-white/10"
+                      className="gap-2 w-32 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
                     >
                       <Search className="w-4 h-4" /> {searchingWorkflowId === wf.id ? 'Finding...' : 'Find Leads'}
                     </Button>
@@ -1087,7 +1087,7 @@ export default function WorkflowsPage() {
                       onClick={() => toggleWorkflow(wf.id)}
                       disabled={togglingWorkflowId === wf.id}
                       variant={isActive ? "secondary" : "default"}
-                      className={`gap-2 w-28 ${isActive ? 'bg-white/10 text-slate-700 hover:bg-white/20' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+                      className={`gap-2 w-28 ${isActive ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                     >
                       {togglingWorkflowId === wf.id ? (
                         <><RefreshCw className="w-4 h-4 animate-spin" /> {t('Switching...')}</>
@@ -1097,7 +1097,7 @@ export default function WorkflowsPage() {
                         <><Play className="w-4 h-4" /> {t('Start')}</>
                       )}
                     </Button>
-                    <Button onClick={() => deleteWorkflow(wf.id)} variant="ghost" size="icon" className="text-gray-500 hover:text-rose-500 hover:bg-red-400/10">
+                    <Button onClick={() => deleteWorkflow(wf.id)} variant="ghost" size="icon" className="text-slate-500 hover:text-rose-500 hover:bg-red-400/10">
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>

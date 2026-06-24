@@ -98,7 +98,7 @@ export default function EmailLogsPage() {
       <div className="glass-panel rounded-lg overflow-hidden border border-white/10">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/5 text-gray-400 text-xs uppercase tracking-wider">
+            <thead className="bg-slate-50 text-gray-400 text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-6 py-4 font-semibold">{t('Time')}</th>
                 <th className="px-6 py-4 font-semibold">{t('Direction')}</th>

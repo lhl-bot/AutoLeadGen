@@ -7,6 +7,7 @@ import { apiFetch } from '@/lib/utils';
 import type { DashboardKpis, DashboardTrend, TodayReport } from '@/lib/types';
 import ConversionFunnel from '@/components/ConversionFunnel';
 import ActivityFeed from '@/components/ActivityFeed';
+import OnboardingChecklist from '@/components/OnboardingChecklist';
 import {
   AreaChart,
   Area,
@@ -94,6 +95,8 @@ export default function DashboardOverview() {
           <p className="mt-2 text-sm text-slate-500">{t('Your AI-powered outbound sales engine is ready.')}</p>
         </div>
       </div>
+
+      <OnboardingChecklist />
 
       {isLoading ? (
         <div className="py-20 text-center text-gray-500">{t('Loading analytics...')}</div>

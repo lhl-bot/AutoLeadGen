@@ -241,3 +241,53 @@ def get_activity(
             "at": (lead.updated_at or lead.created_at).isoformat() if (lead.updated_at or lead.created_at) else None,
         })
     return {"items": items}
+
+
+@router.get("/onboarding")
+def get_onboarding(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """First-run setup progress for the onboarding checklist.
+
+    Each step reports whether the user has completed it and a count, so the
+    dashboard can guide a new user from an empty account to their first
+    reviewed batch of emails. Admins see global counts.
+    """
+    def owned_count(model) -> int:
+        q = db.query(func.count(model.id))
+        if not user.is_admin:
+            q = q.filter(model.user_id == user.id)
+        return int(q.scalar() or 0)
+
+    personas = owned_count(models.CustomerPersona)
+    emails = owned_count(models.EmailAccount)
+    pools = owned_count(models.ClientPool)
+    workflows = owned_count(models.Workflow)
+
+    lead_scope = _lead_scope_condition(db, user)
+    leads_q = db.query(func.count(models.Lead.id))
+    reviewed_q = db.query(func.count(models.Lead.id)).filter(
+        models.Lead.status.in_(_DRAFTED_OR_BEYOND)
+    )
+    if lead_scope is not None:
+        leads_q = leads_q.filter(lead_scope)
+        reviewed_q = reviewed_q.filter(lead_scope)
+    leads_found = int(leads_q.scalar() or 0)
+    drafted_or_sent = int(reviewed_q.scalar() or 0)
+
+    steps = [
+        {"key": "persona", "done": personas > 0, "count": personas},
+        {"key": "email", "done": emails > 0, "count": emails},
+        {"key": "pool", "done": pools > 0, "count": pools},
+        {"key": "workflow", "done": workflows > 0, "count": workflows},
+        {"key": "leads", "done": leads_found > 0, "count": leads_found},
+        {"key": "review", "done": drafted_or_sent > 0, "count": drafted_or_sent},
+    ]
+    completed = sum(1 for s in steps if s["done"])
+    return {
+        "steps": steps,
+        "completed": completed,
+        "total": len(steps),
+        "all_done": completed == len(steps),
+    }

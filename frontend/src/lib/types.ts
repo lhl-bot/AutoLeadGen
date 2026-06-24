@@ -416,3 +416,16 @@ export interface EmailTemplate {
   replied_count?: number
   reply_rate?: number
 }
+
+export interface CrmWebhook {
+  id: number
+  name: string
+  url: string
+  events: string
+  is_active: boolean
+  has_secret?: boolean
+  last_status?: number | null
+  last_error?: string | null
+  last_delivered_at?: string | null
+  created_at: string
+}

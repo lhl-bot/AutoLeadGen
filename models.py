@@ -330,6 +330,26 @@ class EmailTemplate(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class CrmWebhook(Base):
+    """Outbound webhook that pushes lead events to an external CRM/endpoint."""
+    __tablename__ = "crm_webhooks"
+    __table_args__ = (
+        Index("ix_crm_webhooks_user_active", "user_id", "is_active"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    url = Column(String(1000), nullable=False)
+    secret = Column(String(255), nullable=True, doc="Optional HMAC-SHA256 signing secret")
+    events = Column(String(500), default="lead.won", doc="Comma-separated event names this endpoint subscribes to")
+    is_active = Column(Boolean, default=True)
+    last_status = Column(Integer, nullable=True, doc="HTTP status of the last delivery attempt")
+    last_error = Column(Text, nullable=True)
+    last_delivered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class Notification(Base):
     """In-app alert for the owning user (high-intent reply, send failure, low balance...)."""
     __tablename__ = "notifications"

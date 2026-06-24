@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from database import engine, Base
 from routers import (
     auth, agent, analytics, api_usage, channels, client_pools, compliance,
-    credits, email_accounts, email_logs, email_templates, health, leads, notifications, personas, replies, workflows
+    credits, crm_webhooks, email_accounts, email_logs, email_templates, health, leads, notifications, personas, replies, workflows
 )
 
 # Initialize database tables with retries
@@ -118,6 +118,7 @@ app.include_router(channels.router)
 app.include_router(client_pools.router)
 app.include_router(compliance.router)
 app.include_router(credits.router)
+app.include_router(crm_webhooks.router)
 app.include_router(email_accounts.router)
 app.include_router(email_logs.router)
 app.include_router(email_templates.router)

@@ -381,3 +381,40 @@ class Notification(BaseModel):
 class NotificationList(BaseModel):
     unread_count: int = 0
     items: List[Notification] = []
+
+
+# --- CRM Webhooks ---
+class CrmWebhookBase(BaseModel):
+    name: str
+    url: str
+    events: str = "lead.won"
+    is_active: bool = True
+
+    @field_validator("name", "url")
+    @classmethod
+    def _required(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip()
+
+    @field_validator("url")
+    @classmethod
+    def _http_url(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return v
+
+
+class CrmWebhookCreate(CrmWebhookBase):
+    secret: Optional[str] = None
+
+
+class CrmWebhook(CrmWebhookBase):
+    id: int
+    has_secret: bool = False
+    last_status: Optional[int] = None
+    last_error: Optional[str] = None
+    last_delivered_at: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

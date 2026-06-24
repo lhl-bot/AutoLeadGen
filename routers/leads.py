@@ -272,6 +272,15 @@ def bulk_lead_action(
         results.append({"lead_id": lead_id, "ok": True, "status": "drafted"})
 
     db.commit()
+
+    # Fan out CRM webhooks for stage moves after the commit lands.
+    if payload.action == "set_stage":
+        for item in results:
+            if item["ok"]:
+                lead = leads_by_id.get(item["lead_id"])
+                if lead:
+                    _dispatch_stage_webhook(db, lead, payload.target_stage)
+
     return {
         "action": payload.action,
         "requested": len(lead_ids),
@@ -412,7 +421,18 @@ def set_lead_stage(
     lead = _verify_lead_ownership(lead_id, db, user)
     lead.sales_stage = payload.stage
     db.commit()
+    _dispatch_stage_webhook(db, lead, payload.stage)
     return {"lead_id": lead_id, "sales_stage": payload.stage}
+
+
+def _dispatch_stage_webhook(db: Session, lead: models.Lead, stage: str) -> None:
+    """Push a lead.<stage> event to the owner's CRM webhooks (best-effort)."""
+    try:
+        from services.crm_webhooks import dispatch_event
+        from services.notifications import owner_id_for_lead
+        dispatch_event(db, owner_id_for_lead(db, lead), f"lead.{stage}", lead)
+    except Exception:
+        pass
 
 
 def run_preference_learning_bg(persona_id: int):

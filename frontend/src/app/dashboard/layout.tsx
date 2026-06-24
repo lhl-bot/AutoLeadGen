@@ -27,6 +27,7 @@ import {
   WalletCards,
   FileText,
   KanbanSquare,
+  Webhook,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
@@ -154,6 +155,7 @@ export default function DashboardLayout({
     { name: t('Templates'), href: '/dashboard/templates', icon: FileText, section: 'WORKSPACE' },
     { name: t('Email Config'), href: '/dashboard/emails', icon: Mail, section: 'WORKSPACE' },
     { name: t('Omnichannel'), href: '/dashboard/settings', icon: Settings, section: 'WORKSPACE' },
+    { name: t('Integrations'), href: '/dashboard/integrations', icon: Webhook, section: 'WORKSPACE' },
     ...(isAdmin ? [{ name: t('Users'), href: '/dashboard/users', icon: UserCog, section: 'WORKSPACE' }] : []),
 
     { name: t('AI Sandbox'), href: '/dashboard/sandbox', icon: Search, section: 'ASSISTANT' },

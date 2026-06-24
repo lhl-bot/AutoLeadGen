@@ -1,6 +1,8 @@
 import os
 import json
 import asyncio
+import re
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -15,6 +17,7 @@ import logging
 
 logger = logging.getLogger("channels_api")
 router = APIRouter(prefix="/api/channels", tags=["channels"])
+_ACCOUNT_OWNER_MARKER = re.compile(r"\[autoleadgen-user:(\d+)\]")
 
 
 def _insufficient_credits_http(exc: InsufficientCreditsError) -> HTTPException:
@@ -42,6 +45,127 @@ def _verify_lead_ownership(lead_id: int, db: Session, user: User) -> Lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
 
+
+def _owned_unipile_account_name(name: str, user_id: int) -> str:
+    visible_name = _ACCOUNT_OWNER_MARKER.sub("", name).strip() or "Channel Account"
+    return f"{visible_name} [autoleadgen-user:{user_id}]"
+
+
+def _unipile_account_owner_id(account: dict) -> Optional[int]:
+    match = _ACCOUNT_OWNER_MARKER.search(str(account.get("name") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _visible_unipile_account_name(account: dict, provider: str) -> str:
+    raw_name = str(account.get("name") or f"{provider} Account")
+    return _ACCOUNT_OWNER_MARKER.sub("", raw_name).strip() or f"{provider} Account"
+
+
+def _sync_unipile_accounts(db: Session, user: User, unipile_accounts: list[dict]) -> None:
+    """Synchronize only accounts the current user is allowed to manage."""
+    remote_by_id = {
+        str(account["id"]): account
+        for account in unipile_accounts
+        if account.get("id")
+    }
+
+    local_query = db.query(ChannelAccount)
+    if not user.is_admin:
+        local_query = local_query.filter(ChannelAccount.user_id == user.id)
+    local_accounts = local_query.all()
+    local_by_remote_id = {account.unipile_account_id: account for account in local_accounts}
+
+    for remote_id, db_account in local_by_remote_id.items():
+        remote_account = remote_by_id.get(remote_id)
+        if not remote_account:
+            if db_account.status != "DISCONNECTED":
+                db_account.status = "DISCONNECTED"
+            continue
+
+        provider = (
+            remote_account.get("provider")
+            or remote_account.get("type")
+            or "UNKNOWN"
+        ).upper()
+        db_account.status = remote_account.get("status", "OK")
+        db_account.name = _visible_unipile_account_name(remote_account, provider)
+        if provider != "UNKNOWN":
+            db_account.account_type = provider
+
+    for remote_id, remote_account in remote_by_id.items():
+        if remote_id in local_by_remote_id:
+            continue
+
+        owner_id = _unipile_account_owner_id(remote_account)
+        if owner_id is None:
+            if not (
+                user.is_admin
+                and os.environ.get("UNIPILE_SYNC_ALLOW_UNOWNED_AUTOCREATE", "").lower()
+                in {"1", "true", "yes", "on"}
+            ):
+                continue
+            owner_id = user.id
+        elif not user.is_admin and owner_id != user.id:
+            continue
+
+        owner_exists = db.query(User.id).filter(User.id == owner_id).first()
+        if not owner_exists:
+            logger.warning(
+                "Skipping Unipile account %s because owner user #%s does not exist",
+                remote_id,
+                owner_id,
+            )
+            continue
+
+        provider = (
+            remote_account.get("provider")
+            or remote_account.get("type")
+            or "UNKNOWN"
+        ).upper()
+        db.add(ChannelAccount(
+            user_id=owner_id,
+            account_type=provider,
+            unipile_account_id=remote_id,
+            name=_visible_unipile_account_name(remote_account, provider),
+            status=remote_account.get("status", "OK"),
+        ))
+
+    db.commit()
+
+
+def _find_owned_lead_for_message(
+    db: Session,
+    *,
+    channel_account_id: Optional[str],
+    sender_id: str,
+) -> Optional[Lead]:
+    if not channel_account_id:
+        return None
+
+    account = db.query(ChannelAccount).filter(
+        ChannelAccount.unipile_account_id == channel_account_id
+    ).first()
+    if not account:
+        return None
+
+    return (
+        db.query(Lead)
+        .outerjoin(models.Workflow, models.Workflow.id == Lead.workflow_id)
+        .outerjoin(models.ClientPool, models.ClientPool.id == Lead.client_pool_id)
+        .filter(
+            or_(
+                models.Workflow.user_id == account.user_id,
+                models.ClientPool.user_id == account.user_id,
+            ),
+            or_(
+                Lead.linkedin_url.contains(sender_id),
+                Lead.whatsapp_number == sender_id,
+            ),
+        )
+        .first()
+    )
+
+
 @router.post("/auth-link")
 async def create_auth_link(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """
@@ -50,7 +174,10 @@ async def create_auth_link(request: Request, db: Session = Depends(get_db), user
     """
     data = await request.json()
     account_type = data.get("type", "LINKEDIN")
-    name = data.get("name", f"Account - {account_type}")
+    name = _owned_unipile_account_name(
+        data.get("name", f"Account - {account_type}"),
+        user.id,
+    )
     
     frontend_base_url = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
     success_redirect_url = f"{frontend_base_url}/dashboard/settings?unipile_success=true"
@@ -81,49 +208,7 @@ async def list_accounts(sync: bool = False, db: Session = Depends(get_db), user:
             if unipile_accounts is None:
                 logger.info("Skipping Unipile account sync: %s", client.last_error_body or "unknown error")
             else:
-                # Keep track of active account IDs from Unipile
-                active_ids = []
-
-                for up_acc in unipile_accounts:
-                    acc_id = up_acc.get("id")
-                    if not acc_id:
-                        continue
-
-                    active_ids.append(acc_id)
-                    status = up_acc.get("status", "OK")
-                    provider = (up_acc.get("provider") or up_acc.get("type") or "UNKNOWN").upper()
-                    name = up_acc.get("name", f"{provider} Account")
-
-                    db_acc = db.query(ChannelAccount).filter(ChannelAccount.unipile_account_id == acc_id).first()
-                    if db_acc:
-                        db_acc.status = status
-                        db_acc.name = name
-                        # Ensure the account_type is synchronized if it is UNKNOWN or mismatching
-                        if (db_acc.account_type == "UNKNOWN" or db_acc.account_type != provider) and provider != "UNKNOWN":
-                            db_acc.account_type = provider
-                    else:
-                        # Create missing account under current user
-                        new_acc = ChannelAccount(
-                            user_id=user.id,
-                            account_type=provider,
-                            unipile_account_id=acc_id,
-                            name=name,
-                            status=status
-                        )
-                        db.add(new_acc)
-
-                # Mark accounts not returned by Unipile as 'DISCONNECTED'
-                if active_ids:
-                    disconnected_accounts = db.query(ChannelAccount).filter(~ChannelAccount.unipile_account_id.in_(active_ids)).all()
-                else:
-                    disconnected_accounts = db.query(ChannelAccount).all()
-
-                for d_acc in disconnected_accounts:
-                    if d_acc.status != "DISCONNECTED":
-                        d_acc.status = "DISCONNECTED"
-                        logger.info(f"Marked account {d_acc.unipile_account_id} ({d_acc.name}) as DISCONNECTED")
-
-                db.commit()
+                _sync_unipile_accounts(db, user, unipile_accounts)
         except Exception as e:
             logger.error(f"Error syncing accounts with Unipile: {e}")
 
@@ -226,13 +311,21 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
             text = message_data.get("text")
             if not sender_id:
                 return {"status": "ok"}
-            
-            # Match sender_id with our Leads
-            # Unipile's sender_id matches the LinkedIn profile ID or WhatsApp number
-            lead = db.query(Lead).filter(
-                (Lead.linkedin_url.contains(sender_id)) | 
-                (Lead.whatsapp_number == sender_id)
-            ).first()
+
+            account_id = message_data.get("account_id") or payload.get("account_id")
+            lead = _find_owned_lead_for_message(
+                db,
+                channel_account_id=account_id,
+                sender_id=sender_id,
+            )
+            if not account_id:
+                logger.warning("Ignoring Unipile message without account_id")
+            elif not lead:
+                logger.info(
+                    "No lead owned by Unipile account %s matched sender %s",
+                    account_id,
+                    sender_id,
+                )
             
             if lead:
                 # We have a reply from a known lead!

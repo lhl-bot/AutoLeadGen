@@ -351,6 +351,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
     // ── Leads page ──
     'Leads': 'Leads',
+    'Pipeline': 'Pipeline',
     'Workspace': 'Workspace',
     'Every lead across all workflows and pools, searchable in one place.': 'Every lead across all workflows and pools, searchable in one place.',
     'Search company, domain, email, name...': 'Search company, domain, email, name...',
@@ -802,6 +803,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
     // ── Leads page ──
     'Leads': '线索',
+    'Pipeline': '销售漏斗',
     'Workspace': '工作区',
     'Every lead across all workflows and pools, searchable in one place.': '所有工作流和客户库的线索，集中一处随时检索。',
     'Search company, domain, email, name...': '搜索公司、域名、邮箱、姓名……',

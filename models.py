@@ -205,6 +205,9 @@ class Lead(Base):
     # A/B template attribution for the most recent template-based draft/send.
     template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, index=True)
     template_variant = Column(String(20), nullable=True, doc="Variant label of the template used, e.g. A/B")
+
+    # Manual CRM-style sales stage, independent of the automation `status`.
+    sales_stage = Column(String(30), default="new", index=True, doc="new, contacted, interested, quoting, won, lost")
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

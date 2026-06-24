@@ -26,6 +26,7 @@ import {
   LogOut,
   WalletCards,
   FileText,
+  KanbanSquare,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
@@ -145,6 +146,7 @@ export default function DashboardLayout({
     { name: t('Overview'), href: '/dashboard', icon: LayoutDashboard, section: 'WORKSPACE' },
     { name: t('Client Pools'), href: '/dashboard/pools', icon: Database, section: 'WORKSPACE' },
     { name: t('Leads'), href: '/dashboard/leads', icon: Contact, section: 'WORKSPACE' },
+    { name: t('Pipeline'), href: '/dashboard/pipeline', icon: KanbanSquare, section: 'WORKSPACE' },
     { name: t('Review Center'), href: '/dashboard/review', icon: MailCheck, section: 'WORKSPACE' },
     { name: t('Personas'), href: '/dashboard/personas', icon: Users, section: 'WORKSPACE' },
     { name: t('Workflows'), href: '/dashboard/workflows', icon: Briefcase, section: 'WORKSPACE' },

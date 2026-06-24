@@ -185,6 +185,7 @@ class LeadBase(BaseModel):
     handoff_recommended: bool = False
     source_channel: Optional[str] = None
     data_sources: Optional[str] = None
+    sales_stage: Optional[str] = None
 
 class LeadCreate(LeadBase):
     pass

@@ -21,8 +21,13 @@ class BulkLeadRequest(BaseModel):
 
 
 class BulkLeadActionRequest(BulkLeadRequest):
-    action: Literal["reject", "retry", "score", "delete", "blacklist", "move_pool"]
+    action: Literal["reject", "retry", "score", "delete", "blacklist", "move_pool", "set_stage"]
     target_pool_id: Optional[int] = None
+    target_stage: Optional[str] = None
+
+
+class LeadStageRequest(BaseModel):
+    stage: str
 
 
 def _owned_leads_query(db: Session, user: models.User):
@@ -178,6 +183,11 @@ def bulk_lead_action(
         if not target_pool:
             raise HTTPException(status_code=404, detail="Target pool not found")
 
+    if payload.action == "set_stage":
+        from services.sales_stages import is_valid_stage
+        if not is_valid_stage(payload.target_stage):
+            raise HTTPException(status_code=400, detail="Invalid sales stage")
+
     # Lazily imported helpers used only by some actions.
     persona_cache: dict[int, Optional[models.CustomerPersona]] = {}
 
@@ -236,6 +246,11 @@ def bulk_lead_action(
         if payload.action == "move_pool":
             lead.client_pool_id = target_pool.id
             results.append({"lead_id": lead_id, "ok": True, "pool_id": target_pool.id})
+            continue
+
+        if payload.action == "set_stage":
+            lead.sales_stage = payload.target_stage
+            results.append({"lead_id": lead_id, "ok": True, "sales_stage": payload.target_stage})
             continue
 
         # action == "retry"
@@ -333,6 +348,72 @@ async def bulk_send_reviewed_drafts(
         "failed": sum(1 for item in results if not item["ok"]),
         "results": results,
     }
+
+
+@router.get("/board")
+def sales_board(
+    pool_id: Optional[int] = Query(None),
+    workflow_id: Optional[int] = Query(None),
+    limit_per_stage: int = Query(100, ge=1, le=300),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Leads grouped into sales-pipeline columns for the kanban board."""
+    from services.sales_stages import SALES_STAGES, effective_stage
+
+    query = _owned_leads_query(db, user)
+    if pool_id is not None:
+        query = query.filter(models.Lead.client_pool_id == pool_id)
+    if workflow_id is not None:
+        query = query.filter(models.Lead.workflow_id == workflow_id)
+
+    leads = query.order_by(models.Lead.updated_at.desc()).all()
+
+    columns = {stage: [] for stage in SALES_STAGES}
+    for lead in leads:
+        stage = effective_stage(lead.sales_stage, lead.status)
+        bucket = columns.setdefault(stage, [])
+        if len(bucket) >= limit_per_stage:
+            continue
+        bucket.append({
+            "id": lead.id,
+            "company_name": lead.company_name,
+            "domain": lead.domain,
+            "first_name": lead.first_name,
+            "last_name": lead.last_name,
+            "email": lead.email,
+            "job_title": lead.job_title,
+            "status": lead.status,
+            "fit_score": lead.fit_score,
+            "fit_grade": lead.fit_grade,
+            "sales_stage": stage,
+        })
+
+    totals = {stage: len([l for l in leads if effective_stage(l.sales_stage, l.status) == stage]) for stage in SALES_STAGES}
+    return {
+        "stages": SALES_STAGES,
+        "columns": columns,
+        "totals": totals,
+        "total_leads": len(leads),
+    }
+
+
+@router.post("/{lead_id}/stage")
+def set_lead_stage(
+    lead_id: int,
+    payload: LeadStageRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Move a single lead to a sales stage (used by kanban drag-and-drop)."""
+    from services.sales_stages import is_valid_stage
+    if not is_valid_stage(payload.stage):
+        raise HTTPException(status_code=400, detail="Invalid sales stage")
+    lead = _verify_lead_ownership(lead_id, db, user)
+    lead.sales_stage = payload.stage
+    db.commit()
+    return {"lead_id": lead_id, "sales_stage": payload.stage}
+
 
 def run_preference_learning_bg(persona_id: int):
     from database import SessionLocal

@@ -32,6 +32,7 @@ import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
+import NotificationBell from '@/components/NotificationBell';
 
 const COLLAPSED_STORAGE_KEY = 'autoleadgen.sidebar.collapsed';
 
@@ -360,6 +361,7 @@ export default function DashboardLayout({
               <span>{t('Credits')}</span>
               <span className="tabular-nums">{creditBalance ?? '—'}</span>
             </div>
+            <NotificationBell />
             <LanguageSwitcher />
             <button
               type="button"

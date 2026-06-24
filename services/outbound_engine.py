@@ -2116,6 +2116,20 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             failure_update = record_send_failure(db, lead)
             if failure_update.permanently_failed:
                 logger.error(f"✘ Permanently failed to send to {lead.email} after {failure_update.fail_count} attempts: {res.get('message')}")
+                try:
+                    from services.notifications import notify
+                    notify(
+                        db,
+                        wf.user_id,
+                        "send_failed",
+                        f"Email send failed: {lead.company_name or lead.email}",
+                        body=f"Could not deliver to {lead.email} after {failure_update.fail_count} attempts. {res.get('message') or ''}".strip(),
+                        link="/dashboard/review",
+                        reference_type="lead",
+                        reference_id=lead.id,
+                    )
+                except Exception:
+                    pass
             else:
                 logger.warning(f"Send failed to {lead.email} (attempt {failure_update.fail_count}/3): {res.get('message')}")
     except InsufficientCreditsError as e:

@@ -335,7 +335,24 @@ def check_inbox_for_replies():
                                             "company_name": lead.company_name
                                         }, reply_text, intent)
                                         lead.ai_draft = draft
-                                        
+                                        # Alert the owner about a high-intent reply.
+                                        try:
+                                            from services.notifications import notify, owner_id_for_lead
+                                            who = lead.company_name or lead.first_name or sender_email
+                                            notify(
+                                                db,
+                                                owner_id_for_lead(db, lead),
+                                                "high_intent_reply",
+                                                f"High-intent reply from {who}",
+                                                body=reply_text[:200],
+                                                link="/dashboard/replies",
+                                                reference_type="lead",
+                                                reference_id=lead.id,
+                                                commit=False,
+                                            )
+                                        except Exception:
+                                            pass
+
                                     db.commit()
                                     logger.info(f"[REPLY] Logged reply from {sender_email}. Status: {lead.status}. Msg ID: {msg_id}")
                 mail.logout()

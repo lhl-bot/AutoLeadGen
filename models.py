@@ -330,6 +330,25 @@ class EmailTemplate(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class Notification(Base):
+    """In-app alert for the owning user (high-intent reply, send failure, low balance...)."""
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "is_read", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(String(50), nullable=False, doc="high_intent_reply, send_failed, low_balance, email_account_error")
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(255), nullable=True, doc="In-app deep link, e.g. /dashboard/replies")
+    reference_type = Column(String(50), nullable=True)
+    reference_id = Column(Integer, nullable=True)
+    is_read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class SnovioUsageEvent(Base):
     """Local audit trail for Snov.io API calls and estimated credit impact."""
     __tablename__ = "snovio_usage_events"

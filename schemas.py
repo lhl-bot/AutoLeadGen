@@ -361,3 +361,23 @@ class EmailTemplateStats(EmailTemplate):
 class TemplatePreviewRequest(BaseModel):
     subject: Optional[str] = None
     body: str
+
+
+# --- Notifications ---
+class Notification(BaseModel):
+    id: int
+    type: str
+    title: str
+    body: Optional[str] = None
+    link: Optional[str] = None
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    is_read: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationList(BaseModel):
+    unread_count: int = 0
+    items: List[Notification] = []

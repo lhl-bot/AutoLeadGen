@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from typing import List, Optional
-from pydantic import BaseModel
+from sqlalchemy import case, func, or_
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field
 
 import models, schemas
 from database import get_db
@@ -14,6 +14,29 @@ router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 class SendDraftRequest(BaseModel):
     draft: Optional[str] = None
+
+
+class BulkLeadRequest(BaseModel):
+    lead_ids: List[int] = Field(min_length=1, max_length=50)
+
+
+class BulkLeadActionRequest(BulkLeadRequest):
+    action: Literal["reject", "retry", "score", "delete", "blacklist", "move_pool"]
+    target_pool_id: Optional[int] = None
+
+
+def _owned_leads_query(db: Session, user: models.User):
+    query = (
+        db.query(models.Lead)
+        .outerjoin(models.Workflow, models.Workflow.id == models.Lead.workflow_id)
+        .outerjoin(models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id)
+    )
+    if not user.is_admin:
+        query = query.filter(or_(
+            models.Workflow.user_id == user.id,
+            models.ClientPool.user_id == user.id,
+        ))
+    return query
 
 
 @router.get("", response_model=List[schemas.Lead])
@@ -74,6 +97,242 @@ def list_leads(
 
     leads = query.order_by(models.Lead.id.desc()).offset(skip).limit(limit).all()
     return leads
+
+
+@router.get("/review-center")
+def review_center(
+    limit: int = Query(100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    """Return the user's operational review queues and their total counts."""
+    base = _owned_leads_query(db, user)
+    counts = (
+        base.with_entities(
+            func.sum(case((models.Lead.status == "drafted", 1), else_=0)).label("drafted"),
+            func.sum(case((models.Lead.status == "needs_email", 1), else_=0)).label("needs_email"),
+            func.sum(case((models.Lead.status == "send_failed", 1), else_=0)).label("send_failed"),
+            func.sum(case((
+                or_(
+                    models.Lead.status == "replied",
+                    models.Lead.handoff_recommended.is_(True),
+                ),
+                1,
+            ), else_=0)).label("high_intent"),
+        )
+        .one()
+    )
+
+    def queue(condition):
+        return (
+            _owned_leads_query(db, user)
+            .filter(condition)
+            .order_by(
+                models.Lead.handoff_recommended.desc(),
+                models.Lead.fit_score.desc(),
+                models.Lead.updated_at.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+
+    return {
+        "counts": {
+            "drafted": int(counts.drafted or 0),
+            "needs_email": int(counts.needs_email or 0),
+            "send_failed": int(counts.send_failed or 0),
+            "high_intent": int(counts.high_intent or 0),
+        },
+        "queues": {
+            "drafted": queue(models.Lead.status == "drafted"),
+            "needs_email": queue(models.Lead.status == "needs_email"),
+            "send_failed": queue(models.Lead.status == "send_failed"),
+            "high_intent": queue(or_(
+                models.Lead.status == "replied",
+                models.Lead.handoff_recommended.is_(True),
+            )),
+        },
+    }
+
+
+@router.post("/bulk/action")
+def bulk_lead_action(
+    payload: BulkLeadActionRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    lead_ids = list(dict.fromkeys(payload.lead_ids))
+    leads = _owned_leads_query(db, user).filter(models.Lead.id.in_(lead_ids)).all()
+    leads_by_id = {lead.id: lead for lead in leads}
+    results = []
+
+    # move_pool needs a validated, owned destination pool resolved once up front.
+    target_pool = None
+    if payload.action == "move_pool":
+        if not payload.target_pool_id:
+            raise HTTPException(status_code=400, detail="target_pool_id is required to move leads")
+        pool_q = db.query(models.ClientPool).filter(models.ClientPool.id == payload.target_pool_id)
+        if not user.is_admin:
+            pool_q = pool_q.filter(models.ClientPool.user_id == user.id)
+        target_pool = pool_q.first()
+        if not target_pool:
+            raise HTTPException(status_code=404, detail="Target pool not found")
+
+    # Lazily imported helpers used only by some actions.
+    persona_cache: dict[int, Optional[models.CustomerPersona]] = {}
+
+    def resolve_persona(workflow: Optional[models.Workflow]) -> Optional[models.CustomerPersona]:
+        if not workflow or not workflow.persona_id:
+            return None
+        if workflow.persona_id not in persona_cache:
+            persona_cache[workflow.persona_id] = (
+                db.query(models.CustomerPersona)
+                .filter(models.CustomerPersona.id == workflow.persona_id)
+                .first()
+            )
+        return persona_cache[workflow.persona_id]
+
+    for lead_id in lead_ids:
+        lead = leads_by_id.get(lead_id)
+        if not lead:
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead not found"})
+            continue
+
+        if payload.action == "reject":
+            if lead.status != "drafted":
+                results.append({
+                    "lead_id": lead_id,
+                    "ok": False,
+                    "message": f"Only drafted leads can be rejected (current: {lead.status})",
+                })
+                continue
+            lead.status = "rejected"
+            results.append({"lead_id": lead_id, "ok": True, "status": "rejected"})
+            continue
+
+        if payload.action == "score":
+            from services.lead_scoring import apply_lead_score
+            workflow = db.query(models.Workflow).filter(models.Workflow.id == lead.workflow_id).first()
+            score = apply_lead_score(db, lead, workflow=workflow, persona=resolve_persona(workflow))
+            results.append({
+                "lead_id": lead_id,
+                "ok": True,
+                "fit_score": score.score,
+                "fit_grade": score.grade,
+            })
+            continue
+
+        if payload.action == "delete":
+            db.delete(lead)
+            results.append({"lead_id": lead_id, "ok": True, "status": "deleted"})
+            continue
+
+        if payload.action == "blacklist":
+            from services.suppression import suppress_lead
+            suppress_lead(db, lead, reason="manual", source="bulk", status="rejected")
+            results.append({"lead_id": lead_id, "ok": True, "status": "rejected"})
+            continue
+
+        if payload.action == "move_pool":
+            lead.client_pool_id = target_pool.id
+            results.append({"lead_id": lead_id, "ok": True, "pool_id": target_pool.id})
+            continue
+
+        # action == "retry"
+        if lead.status != "send_failed":
+            results.append({
+                "lead_id": lead_id,
+                "ok": False,
+                "message": f"Only failed sends can be retried (current: {lead.status})",
+            })
+            continue
+        if not (lead.ai_draft or "").strip():
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead has no draft"})
+            continue
+        if not lead.email:
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead has no email"})
+            continue
+        lead.status = "drafted"
+        lead.send_fail_count = 0
+        results.append({"lead_id": lead_id, "ok": True, "status": "drafted"})
+
+    db.commit()
+    return {
+        "action": payload.action,
+        "requested": len(lead_ids),
+        "succeeded": sum(1 for item in results if item["ok"]),
+        "failed": sum(1 for item in results if not item["ok"]),
+        "results": results,
+    }
+
+
+@router.post("/bulk/send-drafts")
+async def bulk_send_reviewed_drafts(
+    payload: BulkLeadRequest,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    lead_ids = list(dict.fromkeys(payload.lead_ids))
+    leads = _owned_leads_query(db, user).filter(models.Lead.id.in_(lead_ids)).all()
+    leads_by_id = {lead.id: lead for lead in leads}
+    workflow_ids = {lead.workflow_id for lead in leads if lead.workflow_id}
+    workflows = db.query(models.Workflow).filter(models.Workflow.id.in_(workflow_ids)).all() if workflow_ids else []
+    workflows_by_id = {workflow.id: workflow for workflow in workflows}
+
+    from services.outbound_engine import send_lead_email
+
+    results = []
+    for lead_id in lead_ids:
+        lead = leads_by_id.get(lead_id)
+        if not lead:
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead not found"})
+            continue
+        if lead.status != "drafted":
+            results.append({
+                "lead_id": lead_id,
+                "ok": False,
+                "message": f"Lead is not awaiting review (current: {lead.status})",
+            })
+            continue
+        if not lead.email:
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead has no recipient email"})
+            continue
+        if not (lead.ai_draft or "").strip():
+            results.append({"lead_id": lead_id, "ok": False, "message": "Lead has no reviewed draft"})
+            continue
+        workflow = workflows_by_id.get(lead.workflow_id)
+        if not workflow:
+            results.append({"lead_id": lead_id, "ok": False, "message": "Workflow not found"})
+            continue
+
+        try:
+            await send_lead_email(lead, workflow, db, raise_on_credit_error=True)
+            db.refresh(lead)
+            results.append({
+                "lead_id": lead_id,
+                "ok": lead.status == "sent",
+                "status": lead.status,
+                "message": "Sent" if lead.status == "sent" else (lead.reply_snippet or "Send was not completed"),
+            })
+        except InsufficientCreditsError as exc:
+            db.rollback()
+            results.append({
+                "lead_id": lead_id,
+                "ok": False,
+                "message": "Insufficient credits",
+                "required": exc.required,
+                "balance": exc.balance,
+            })
+        except Exception as exc:
+            db.rollback()
+            results.append({"lead_id": lead_id, "ok": False, "message": str(exc)})
+
+    return {
+        "requested": len(lead_ids),
+        "succeeded": sum(1 for item in results if item["ok"]),
+        "failed": sum(1 for item in results if not item["ok"]),
+        "results": results,
+    }
 
 def run_preference_learning_bg(persona_id: int):
     from database import SessionLocal

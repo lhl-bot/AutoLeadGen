@@ -294,6 +294,26 @@ class CreditTransaction(Base):
     user = relationship("User", foreign_keys=[user_id])
     created_by = relationship("User", foreign_keys=[created_by_user_id])
 
+
+class SnovioUsageEvent(Base):
+    """Local audit trail for Snov.io API calls and estimated credit impact."""
+    __tablename__ = "snovio_usage_events"
+    __table_args__ = (
+        Index("ix_snovio_usage_events_created_endpoint", "created_at", "endpoint"),
+        Index("ix_snovio_usage_events_domain_created", "domain", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    endpoint = Column(String(120), nullable=False, index=True)
+    domain = Column(String(255), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
+    status = Column(String(50), nullable=True)
+    result_count = Column(Integer, default=0, nullable=False)
+    estimated_credits = Column(Integer, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class LeadBrief(Base):
     __tablename__ = "lead_briefs"
     __table_args__ = (

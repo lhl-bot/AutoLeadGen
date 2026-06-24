@@ -353,7 +353,7 @@ def _pipeline_search_and_find(keywords: str, positions: str, offset: int = 0) ->
             search_url = p.get("search_emails_start")
             if not email and search_url:
                 logger.info(f"[PIPELINE] Step 3 - Fetching email for {name} at {domain}")
-                email = snovio.get_prospect_email(search_url)
+                email = snovio.get_prospect_email(search_url, domain=domain)
             
             # ONLY add prospects that actually have an email
             if email:
@@ -409,7 +409,7 @@ def _pipeline_find_at_domain(domain: str, positions: str) -> str:
         search_url = p.get("search_emails_start")
         if search_url:
             logger.info(f"[PIPELINE] Fetching email for {name}")
-            email = snovio.get_prospect_email(search_url)
+            email = snovio.get_prospect_email(search_url, domain=domain)
         
         results.append({
             "name": name,

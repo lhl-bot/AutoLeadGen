@@ -49,6 +49,51 @@ export interface ClientPool {
   workflow_count?: number
 }
 
+export type CsvLeadField =
+  | 'company_name'
+  | 'domain'
+  | 'email'
+  | 'first_name'
+  | 'last_name'
+  | 'job_title'
+  | 'linkedin_url'
+  | 'whatsapp_number'
+
+export interface CsvImportPreviewRow {
+  row_number: number
+  status: 'valid' | 'duplicate' | 'invalid'
+  reason?: string | null
+  normalized: Partial<Record<CsvLeadField, string | null>>
+  raw: Record<string, string>
+}
+
+export interface CsvImportPreview {
+  filename?: string | null
+  encoding: string
+  delimiter: string
+  headers: string[]
+  fields: CsvLeadField[]
+  suggested_mapping: Record<CsvLeadField, string | null>
+  mapping: Record<CsvLeadField, string | null>
+  mapping_required: boolean
+  total_rows: number
+  counts: {
+    valid: number
+    duplicate: number
+    invalid: number
+  }
+  preview_rows: CsvImportPreviewRow[]
+}
+
+export interface CsvImportResult {
+  filename?: string | null
+  pool_id: number
+  total_rows: number
+  imported: number
+  duplicates: number
+  invalid: number
+}
+
 export interface Lead {
   id: number
   workflow_id?: number | null
@@ -78,6 +123,27 @@ export interface Lead {
   data_sources?: string | null
   created_at?: string | null
   updated_at?: string | null
+}
+
+export type ReviewQueueKey = 'drafted' | 'needs_email' | 'send_failed' | 'high_intent'
+
+export interface ReviewCenterData {
+  counts: Record<ReviewQueueKey, number>
+  queues: Record<ReviewQueueKey, Lead[]>
+}
+
+export interface BulkLeadResult {
+  lead_id: number
+  ok: boolean
+  status?: string
+  message?: string
+}
+
+export interface BulkLeadResponse {
+  requested: number
+  succeeded: number
+  failed: number
+  results: BulkLeadResult[]
 }
 
 export interface CustomerPersona {
@@ -312,4 +378,17 @@ export interface ApiUsageSummary {
     label: string
     count: number
   }>
+}
+
+export interface OnboardingStep {
+  key: 'persona' | 'email' | 'pool' | 'workflow' | 'leads' | 'review'
+  done: boolean
+  count: number
+}
+
+export interface OnboardingStatus {
+  steps: OnboardingStep[]
+  completed: number
+  total: number
+  all_done: boolean
 }

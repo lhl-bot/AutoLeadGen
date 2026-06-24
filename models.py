@@ -72,6 +72,7 @@ class Workflow(Base):
     send_interval_max = Column(Integer, default=300)
     auto_followup = Column(Boolean, default=False)
     max_followups = Column(Integer, default=3)
+    followup_steps = Column(JSON, nullable=True, doc="Ordered cold follow-up sequence: [{day_offset, instruction?}]. Overrides max_followups + global interval when set.")
     search_offset = Column(Integer, default=0)
     
     # Playbook & warmup settings

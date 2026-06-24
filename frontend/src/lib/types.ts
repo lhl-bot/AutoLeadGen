@@ -167,6 +167,11 @@ export interface CustomerPersona {
   created_at: string
 }
 
+export interface FollowupStep {
+  day_offset: number
+  instruction?: string | null
+}
+
 export interface Workflow {
   id: number
   name: string
@@ -190,6 +195,7 @@ export interface Workflow {
   send_interval_max: number
   auto_followup: boolean
   max_followups: number
+  followup_steps?: FollowupStep[] | null
   search_offset: number
   enable_linkedin: boolean
   enable_whatsapp: boolean

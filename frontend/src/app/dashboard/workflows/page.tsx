@@ -21,6 +21,11 @@ import { useTranslation } from '@/lib/i18n';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import type { ClientPool, CustomerPersona, EmailAccount, Workflow, PlaybookPreset } from '@/lib/types';
 
+interface FollowupStepForm {
+  day_offset: number
+  instruction: string
+}
+
 interface WorkflowForm {
   name: string
   status: string
@@ -43,6 +48,7 @@ interface WorkflowForm {
   send_interval_max: number
   auto_followup: boolean
   max_followups: number
+  followup_steps: FollowupStepForm[]
   search_offset: number
   email_account_ids: number[]
   enable_linkedin: boolean
@@ -75,6 +81,7 @@ const defaultWorkflowForm: WorkflowForm = {
   send_interval_max: 300,
   auto_followup: false,
   max_followups: 3,
+  followup_steps: [],
   search_offset: 0,
   email_account_ids: [],
   enable_linkedin: false,
@@ -112,6 +119,10 @@ function workflowToForm(workflow: Workflow): WorkflowForm {
     send_interval_max: workflow.send_interval_max || 300,
     auto_followup: Boolean(workflow.auto_followup),
     max_followups: workflow.max_followups || 3,
+    followup_steps: (workflow.followup_steps || []).map(s => ({
+      day_offset: s.day_offset,
+      instruction: s.instruction || '',
+    })),
     search_offset: workflow.search_offset || 0,
     email_account_ids: workflow.emails?.map(email => email.id) || [],
     enable_linkedin: Boolean(workflow.enable_linkedin),
@@ -309,6 +320,12 @@ export default function WorkflowsPage() {
     send_interval_min: Number(formData.send_interval_min) || 60,
     send_interval_max: Number(formData.send_interval_max) || 300,
     max_followups: Number(formData.max_followups) || 3,
+    followup_steps: formData.followup_steps.length > 0
+      ? formData.followup_steps.map(s => ({
+          day_offset: Math.max(1, Math.min(90, Number(s.day_offset) || 1)),
+          instruction: s.instruction.trim() || null,
+        }))
+      : null,
     search_offset: Number(formData.search_offset) || 0,
     linkedin_daily_limit: Number(formData.linkedin_daily_limit) || 20,
   });
@@ -758,6 +775,91 @@ export default function WorkflowsPage() {
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
                     {t('Auto Follow-up')} ({t('AI drafts follow-ups for review')})
                   </label>
+
+                  {/* Visual follow-up sequence editor */}
+                  {formData.auto_followup && (
+                    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h5 className="text-sm font-semibold text-slate-800">{t('Follow-up Sequence')}</h5>
+                        {formData.followup_steps.length > 0 && (
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                            {t('Sequence overrides Max Follow-ups')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formData.followup_steps.length > 0
+                          ? t('Custom cadence — each step is sent the set number of days after the previous email. Replies and unsubscribes stop the sequence automatically.')
+                          : t('Using Max Follow-ups with the default interval. Add steps below to customize the timing per round.')}
+                      </p>
+
+                      {formData.followup_steps.length > 0 && (
+                        <ol className="mt-3 space-y-2">
+                          {formData.followup_steps.map((step, i) => {
+                            const cumulativeDay = formData.followup_steps
+                              .slice(0, i + 1)
+                              .reduce((sum, s) => sum + (Number(s.day_offset) || 0), 0);
+                            return (
+                              <li key={i} className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white p-2.5">
+                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white">{i + 1}</span>
+                                <span className="text-xs text-slate-500">{t('Follow-up')}</span>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={90}
+                                  value={step.day_offset}
+                                  onChange={e => {
+                                    const v = parseInt(e.target.value) || 1;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      followup_steps: prev.followup_steps.map((s, idx) => idx === i ? { ...s, day_offset: v } : s),
+                                    }));
+                                  }}
+                                  className="h-8 w-16"
+                                />
+                                <span className="text-xs text-slate-500">{t('days after previous email')}</span>
+                                <span className="text-[11px] text-slate-400">· {t('day')} {cumulativeDay}</span>
+                                <Input
+                                  type="text"
+                                  value={step.instruction}
+                                  placeholder={t('Optional: what should this follow-up focus on? (e.g. share a case study)')}
+                                  onChange={e => {
+                                    const v = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      followup_steps: prev.followup_steps.map((s, idx) => idx === i ? { ...s, instruction: v } : s),
+                                    }));
+                                  }}
+                                  className="h-8 min-w-[180px] flex-1"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setFormData(prev => ({ ...prev, followup_steps: prev.followup_steps.filter((_, idx) => idx !== i) }))}
+                                  className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                                  aria-label={t('Remove')}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      )}
+
+                      {formData.followup_steps.length < 6 && (
+                        <button
+                          type="button"
+                          onClick={() => setFormData(prev => ({
+                            ...prev,
+                            followup_steps: [...prev.followup_steps, { day_offset: prev.followup_steps.length === 0 ? 3 : 4, instruction: '' }],
+                          }))}
+                          className="mt-3 inline-flex items-center gap-1 rounded-md border border-dashed border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> {t('Add step')}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 </div>

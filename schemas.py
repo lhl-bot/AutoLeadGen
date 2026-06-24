@@ -1,6 +1,20 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+
+class FollowupStep(BaseModel):
+    """One step in a workflow's cold follow-up sequence."""
+    day_offset: int = Field(ge=1, le=90, description="Days to wait after the previous email before sending this follow-up")
+    instruction: Optional[str] = Field(default=None, max_length=500, description="Optional extra guidance for the AI for this step")
+
+    @field_validator("instruction")
+    @classmethod
+    def _strip_instruction(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 # --- Customer Persona ---
 class CustomerPersonaBase(BaseModel):
@@ -86,7 +100,14 @@ class WorkflowBase(BaseModel):
     send_interval_max: int = 300
     auto_followup: bool = False
     max_followups: int = 3
+    followup_steps: Optional[List[FollowupStep]] = Field(default=None, max_length=6)
     search_offset: int = 0
+
+    @field_validator("followup_steps")
+    @classmethod
+    def _empty_steps_to_none(cls, v):
+        # Treat an empty sequence as "not configured" so the engine falls back to defaults.
+        return v or None
     email_signature: Optional[str] = None
     # Playbook
     playbook_type: str = "standard"

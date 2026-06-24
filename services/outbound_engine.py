@@ -412,7 +412,9 @@ async def process_workflow(wf_id: int):
             wf_send_interval_min = wf.send_interval_min or 300
             wf_send_interval_max = wf.send_interval_max or 600
             wf_auto_followup = wf.auto_followup
-            wf_max_followups = wf.max_followups or 3
+            wf_followup_steps = wf.followup_steps
+            from services.followup_sequence import effective_max_followups
+            wf_max_followups = effective_max_followups(wf_followup_steps, wf.max_followups or 3)
             wf_name = wf.name
             wf_user_id = wf.user_id
             wf_ai_prompt = wf.ai_prompt or "Introduce our company and ask for a quick meeting."
@@ -1009,8 +1011,11 @@ async def process_workflow(wf_id: int):
                         if not last_outbound:
                             continue
 
-                        # Get interval from env var or default to 72 hours
-                        interval_hours = float(os.environ.get("EMAIL_FOLLOWUP_INTERVAL_HOURS", 72))
+                        # Interval: configured per-step sequence if present, else the global env default.
+                        from services.followup_sequence import interval_hours_for_round, instruction_for_round
+                        default_interval_hours = float(os.environ.get("EMAIL_FOLLOWUP_INTERVAL_HOURS", 72))
+                        next_round = current_followup_count + 1
+                        interval_hours = interval_hours_for_round(wf_followup_steps, next_round, default_interval_hours)
                         elapsed_hours = (datetime.now(timezone.utc) - last_outbound.sent_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
 
                         if elapsed_hours >= interval_hours:
@@ -1028,6 +1033,12 @@ async def process_workflow(wf_id: int):
                                 })
 
                             followup_round = current_followup_count + 1
+
+                            # Append this step's custom instruction (if configured) to the AI prompt.
+                            step_instruction = instruction_for_round(wf_followup_steps, followup_round)
+                            round_ai_prompt = wf_ai_prompt or ""
+                            if step_instruction:
+                                round_ai_prompt = f"{round_ai_prompt}\n\nFor this follow-up specifically: {step_instruction}".strip()
 
                             from services.followup_engine import draft_cold_followup_email
                             try:
@@ -1053,7 +1064,7 @@ async def process_workflow(wf_id: int):
                                 lead_data={"first_name": first_name, "company_name": company_name},
                                 conversation_history=conversation_history,
                                 followup_round=followup_round,
-                                ai_prompt=wf_ai_prompt or ""
+                                ai_prompt=round_ai_prompt
                             )
 
                             if followup_draft:

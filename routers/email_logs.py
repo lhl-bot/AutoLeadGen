@@ -82,56 +82,71 @@ def deliverability_summary(
     """Return deliverability metrics for the last N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # Base query: outbound logs within time range
-    base_q = (
-        db.query(models.EmailLog, models.Lead)
+    base_filters = [
+        models.EmailLog.direction == "outbound",
+        models.EmailLog.sent_at >= since,
+    ]
+
+    outbound_q = (
+        db.query(models.EmailLog)
         .join(models.Lead, models.EmailLog.lead_id == models.Lead.id)
     )
     if not user.is_admin:
-        base_q = base_q.join(models.Workflow, models.Lead.workflow_id == models.Workflow.id).filter(
-            models.Workflow.user_id == user.id
+        outbound_q = outbound_q.join(
+            models.Workflow,
+            models.Lead.workflow_id == models.Workflow.id,
+        ).filter(models.Workflow.user_id == user.id)
+
+    outbound_q = outbound_q.filter(*base_filters)
+    outbound_count = outbound_q.with_entities(func.count(models.EmailLog.id)).scalar() or 0
+
+    contacted_leads = outbound_q.with_entities(
+        models.Lead.id.label("lead_id"),
+        models.Lead.status.label("status"),
+    ).distinct().subquery()
+    status_rows = (
+        db.query(contacted_leads.c.status, func.count(contacted_leads.c.lead_id))
+        .group_by(contacted_leads.c.status)
+        .all()
+    )
+    status_counts = {status: count for status, count in status_rows}
+
+    domain_expr = func.lower(
+        func.substr(
+            models.EmailLog.to_email,
+            func.instr(models.EmailLog.to_email, "@") + 1,
         )
-
-    outbound_logs = base_q.filter(
-        models.EmailLog.direction == "outbound",
-        models.EmailLog.sent_at >= since,
-    ).all()
-
-    outbound_count = len(outbound_logs)
-
-    # Status counts from leads that received outbound emails
-    lead_ids = {log.Lead.id for log in outbound_logs}
-    status_counts = {}
-    if lead_ids:
-        status_rows = (
-            db.query(models.Lead.status, func.count(models.Lead.id))
-            .filter(models.Lead.id.in_(lead_ids))
-            .group_by(models.Lead.status)
-            .all()
+    )
+    risk_rows = (
+        outbound_q.with_entities(
+            domain_expr.label("domain"),
+            func.count(models.EmailLog.id).label("sent"),
+            func.sum(case(
+                (models.Lead.status.in_(("bounced", "send_failed", "invalid_email")), 1),
+                else_=0,
+            )).label("failures"),
         )
-        status_counts = {row[0]: row[1] for row in status_rows}
-
-    # Risk domains: domains with high failure rates
-    domain_stats = {}
-    for log in outbound_logs:
-        to_email = (log.EmailLog.to_email or "").lower()
-        domain = to_email.split("@")[-1] if "@" in to_email else ""
-        if not domain:
-            continue
-        if domain not in domain_stats:
-            domain_stats[domain] = {"sent": 0, "failures": 0}
-        domain_stats[domain]["sent"] += 1
-        if log.Lead.status in ("bounced", "send_failed", "invalid_email"):
-            domain_stats[domain]["failures"] += 1
-
-    risk_domains = sorted(
-        [
-            {"domain": d, "failures": s["failures"], "sent": s["sent"]}
-            for d, s in domain_stats.items()
-            if s["failures"] > 0 and s["sent"] >= 2
-        ],
-        key=lambda x: -x["failures"],
-    )[:10]
+        .filter(func.instr(models.EmailLog.to_email, "@") > 0)
+        .group_by(domain_expr)
+        .having(
+            func.count(models.EmailLog.id) >= 2,
+            func.sum(case(
+                (models.Lead.status.in_(("bounced", "send_failed", "invalid_email")), 1),
+                else_=0,
+            )) > 0,
+        )
+        .order_by(desc("failures"), desc("sent"))
+        .limit(10)
+        .all()
+    )
+    risk_domains = [
+        {
+            "domain": row.domain,
+            "failures": int(row.failures or 0),
+            "sent": int(row.sent or 0),
+        }
+        for row in risk_rows
+    ]
 
     return {
         "status_counts": status_counts,

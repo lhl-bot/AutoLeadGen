@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload, subqueryload
-from sqlalchemy import func
+from sqlalchemy import case, func, or_
 from typing import List
 import os
 
@@ -292,15 +292,28 @@ def run_workflow_search(
     }
 
 
-@router.get("/{workflow_id}")
+@router.get("/{workflow_id}", response_model=schemas.WorkflowWithDetails)
 def read_workflow(workflow_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    query = db.query(models.Workflow).options(joinedload(models.Workflow.email_accounts)).filter(models.Workflow.id == workflow_id)
+    query = (
+        db.query(models.Workflow)
+        .options(
+            joinedload(models.Workflow.workflow_emails)
+            .joinedload(models.WorkflowEmail.email_account)
+        )
+        .filter(models.Workflow.id == workflow_id)
+    )
     if not user.is_admin:
         query = query.filter(models.Workflow.user_id == user.id)
     wf = query.first()
     if not wf:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    return wf
+    workflow_data = schemas.Workflow.model_validate(wf).model_dump()
+    emails = [
+        schemas.EmailAccount.model_validate(binding.email_account)
+        for binding in wf.workflow_emails
+        if binding.email_account is not None
+    ]
+    return schemas.WorkflowWithDetails(**workflow_data, emails=emails)
 
 
 @router.get("/{workflow_id}/pilot-report", response_model=schemas.WorkflowPilotReport)
@@ -316,45 +329,84 @@ def get_workflow_pilot_report(
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    leads = db.query(models.Lead).filter(models.Lead.workflow_id == workflow_id).all()
-    total = len(leads)
+    aggregate = (
+        db.query(
+            func.count(models.Lead.id).label("total"),
+            func.sum(case((
+                or_(models.Lead.fit_score >= 65, models.Lead.user_rating == "positive"),
+                1,
+            ), else_=0)).label("matched"),
+            func.sum(case((
+                models.Lead.email.isnot(None) & (models.Lead.email != ""),
+                1,
+            ), else_=0)).label("email_leads"),
+            func.sum(case((
+                (models.Lead.email.isnot(None) & (models.Lead.email != ""))
+                & or_(
+                    models.Lead.email_verified.is_(True),
+                    models.Lead.email_validation_status == "valid",
+                ),
+                1,
+            ), else_=0)).label("valid_emails"),
+            func.sum(case((
+                models.Lead.status.in_(("sent", "replied")),
+                1,
+            ), else_=0)).label("contacted"),
+            func.sum(case((
+                models.Lead.status == "replied",
+                1,
+            ), else_=0)).label("replied"),
+            func.sum(case((
+                models.Lead.handoff_recommended.is_(True),
+                1,
+            ), else_=0)).label("handoff"),
+            func.sum(case((
+                or_(
+                    models.Lead.status == "replied",
+                    models.Lead.handoff_recommended.is_(True),
+                ),
+                1,
+            ), else_=0)).label("high_intent"),
+            func.avg(models.Lead.fit_score).label("avg_fit_score"),
+        )
+        .filter(models.Lead.workflow_id == workflow_id)
+        .one()
+    )
+    total = int(aggregate.total or 0)
     if total == 0:
         return schemas.WorkflowPilotReport(workflow_id=workflow_id)
 
-    matched = [
-        lead for lead in leads
-        if (lead.fit_score is not None and lead.fit_score >= 65) or lead.user_rating == "positive"
-    ]
-    email_leads = [lead for lead in leads if lead.email]
-    valid_emails = [
-        lead for lead in email_leads
-        if lead.email_verified or lead.email_validation_status == "valid"
-    ]
-    contacted = [lead for lead in leads if lead.status in {"sent", "replied"}]
-    replied = [lead for lead in leads if lead.status == "replied"]
-    handoff = [lead for lead in leads if lead.handoff_recommended]
-    scores = [lead.fit_score for lead in leads if lead.fit_score is not None]
-
-    channel_counts = {}
-    for lead in leads:
-        channel = lead.source_channel or "unknown"
-        channel_counts[channel] = channel_counts.get(channel, 0) + 1
+    channel_rows = (
+        db.query(
+            func.coalesce(models.Lead.source_channel, "unknown").label("channel"),
+            func.count(models.Lead.id).label("lead_count"),
+        )
+        .filter(models.Lead.workflow_id == workflow_id)
+        .group_by(func.coalesce(models.Lead.source_channel, "unknown"))
+        .order_by(func.count(models.Lead.id).desc())
+        .limit(5)
+        .all()
+    )
     top_channels = [
-        f"{name}: {count}" for name, count in sorted(
-            channel_counts.items(), key=lambda item: item[1], reverse=True
-        )[:5]
+        f"{row.channel}: {row.lead_count}"
+        for row in channel_rows
     ]
 
+    matched = int(aggregate.matched or 0)
+    email_leads = int(aggregate.email_leads or 0)
+    valid_emails = int(aggregate.valid_emails or 0)
+    contacted = int(aggregate.contacted or 0)
+    replied = int(aggregate.replied or 0)
     return schemas.WorkflowPilotReport(
         workflow_id=workflow_id,
         leads_total=total,
-        matched_leads=len(matched),
-        match_rate=len(matched) / total if total else 0,
-        email_valid_rate=len(valid_emails) / len(email_leads) if email_leads else 0,
-        reply_rate=len(replied) / len(contacted) if contacted else 0,
-        handoff_count=len(handoff),
-        high_intent_count=len(replied) + len([lead for lead in handoff if lead.status != "replied"]),
-        avg_fit_score=(sum(scores) / len(scores)) if scores else 0,
+        matched_leads=matched,
+        match_rate=matched / total,
+        email_valid_rate=valid_emails / email_leads if email_leads else 0,
+        reply_rate=replied / contacted if contacted else 0,
+        handoff_count=int(aggregate.handoff or 0),
+        high_intent_count=int(aggregate.high_intent or 0),
+        avg_fit_score=float(aggregate.avg_fit_score or 0),
         top_channels=top_channels,
     )
 

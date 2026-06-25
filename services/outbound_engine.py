@@ -1509,6 +1509,31 @@ def _lc_industry_map() -> Dict[str, str]:
     return mapping
 
 
+# Generic commerce words that don't help LeadContact target an industry/role.
+_LC_GENERIC_KEYWORDS = {
+    "wholesale", "retail", "factory", "manufacturer", "manufacturers", "supplier",
+    "suppliers", "sets", "set", "oem", "odm", "custom", "customized", "company",
+    "companies", "products", "product", "b2b", "export", "exporter", "exporters",
+    "import", "importer", "importers", "trade", "trading", "goods", "quality",
+    "supply", "brand", "brands", "series", "collection", "style", "the", "and", "for",
+}
+
+
+def _distinctive_keyword(keywords: str, product_focus: str) -> str:
+    """Pick a single distinctive word for LeadContact search.
+
+    LeadContact matches single words far better than multi-word phrases
+    (e.g. "bedding" returns results; "wholesale bedding sets" returns 0). Prefer
+    the first non-generic word from the keywords, then the product focus.
+    """
+    for src in (keywords, product_focus):
+        for w in re.split(r"[,\s]+", (src or "").lower()):
+            w = w.strip()
+            if len(w) > 2 and w not in _LC_GENERIC_KEYWORDS:
+                return w
+    return ""
+
+
 def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size=None):
     """Ordered LeadContact search attempts, most specific first.
 
@@ -1524,14 +1549,15 @@ def _build_leadcontact_query_plan(keywords, target_role, target_region, product_
     product_focus = (product_focus or "").strip()
 
     job_titles = [t.strip() for t in re.split(r"[,;]", target_role) if t.strip()]
+
+    # Single distinctive keyword — LeadContact returns 0 for multi-word phrases.
     kw_tokens = [k.strip() for k in re.split(r"[,;]", keywords) if k.strip()]
     primary_kw = kw_tokens[0] if kw_tokens else ""
-    # Narrowest single distinctive word (e.g. "padel") as the broad last resort.
+    single_kw = _distinctive_keyword(keywords, product_focus) or primary_kw
+    # Alternate broad word from the product focus (e.g. "microfiber").
     focus_kw = ""
     if product_focus:
         focus_kw = product_focus.split(",")[0].strip().split(" ")[0].strip()
-    if not focus_kw and primary_kw:
-        focus_kw = primary_kw.split(" ")[0].strip()
 
     haystack = (keywords + " " + product_focus).lower()
     industries = []
@@ -1539,22 +1565,30 @@ def _build_leadcontact_query_plan(keywords, target_role, target_region, product_
         if k in haystack and v not in industries:
             industries.append(v)
 
-    locations = [target_region] if target_region else None
+    # Discrete locations — LeadContact expects a list of places, not one
+    # comma-joined blob string ("UK, Germany, France, ..." matches nothing).
+    locations = [c.strip() for c in re.split(r"[,;]", target_region) if c.strip()] or None
     use_industry = _bool_env("LEADCONTACT_USE_INDUSTRY", True)
-    size = company_size or None  # carried on all but the broadest fallback tier
+    size = company_size or None
 
     plan = []
     if industries and use_industry:
+        # 1. Most specific: titles + industry + keyword.
         plan.append({"job_titles": job_titles or None, "locations": locations,
-                     "industries": industries, "company_size": size, "keyword": primary_kw or None})
-    # Drop industry (the proven recall-killer), keep titles + region + size + keyword.
+                     "industries": industries, "company_size": size, "keyword": single_kw or None})
+        # 2. Keep INDUSTRY, drop titles + size. Titles over-constrain industry
+        #    results to zero, while industry + keyword alone returns on-target
+        #    companies (verified: Textiles + "bedding" → real textile firms).
+        plan.append({"job_titles": None, "locations": locations,
+                     "industries": industries, "company_size": None, "keyword": single_kw or None})
+    # 3. Drop industry, keep titles + keyword.
     plan.append({"job_titles": job_titles or None, "locations": locations,
-                 "industries": None, "company_size": size, "keyword": primary_kw or None})
-    # Drop titles, keep region + size + primary keyword.
+                 "industries": None, "company_size": size, "keyword": single_kw or None})
+    # 4. Keyword + region only (broad — drop size so we still get results).
     plan.append({"job_titles": None, "locations": locations,
-                 "industries": None, "company_size": size, "keyword": primary_kw or None})
-    # Broad last resort: single distinctive word + region (size dropped too).
-    if focus_kw and focus_kw.lower() != (primary_kw or "").lower():
+                 "industries": None, "company_size": None, "keyword": single_kw or None})
+    # 5. Broad last resort: product-focus word (size dropped too).
+    if focus_kw and focus_kw.lower() != (single_kw or "").lower():
         plan.append({"job_titles": None, "locations": locations,
                      "industries": None, "company_size": None, "keyword": focus_kw})
 

@@ -12,23 +12,27 @@ WF15 = dict(
 )
 
 
-def test_first_tier_is_specific_and_second_drops_industry():
+def test_first_tier_specific_second_keeps_industry_drops_titles():
     plan = _build_leadcontact_query_plan(**WF15)
     assert len(plan) >= 2
-    # Tier 1: industry present (specific)
+    # Tier 1: titles + industry (most specific)
     assert plan[0]["industries"] == ["Sporting Goods"]
     assert plan[0]["locations"] == ["Spain"]
-    # Tier 2: industry dropped — the proven recall-killer is no longer mandatory
-    assert plan[1]["industries"] is None
+    assert plan[0]["job_titles"] is not None
+    # Tier 2: keep INDUSTRY, drop titles — titles over-constrain industry results
+    # to zero, while industry + keyword alone returns on-target companies.
+    assert plan[1]["industries"] == ["Sporting Goods"]
+    assert plan[1]["job_titles"] is None
+    # Later tiers still drop industry as a fallback.
     assert any(p["industries"] is None for p in plan)
 
 
-def test_primary_keyword_is_single_token_not_concatenated():
+def test_keyword_is_single_distinctive_word():
     plan = _build_leadcontact_query_plan(**WF15)
-    # Was previously "padel club  padel academy" (too specific). Now just the first token.
-    assert plan[0]["keyword"] == "padel club"
+    # LeadContact returns 0 for multi-word phrases, so use one distinctive word.
+    assert plan[0]["keyword"] == "padel"
     for p in plan:
-        assert p["keyword"] != "padel club  padel academy"
+        assert " " not in (p["keyword"] or "")
 
 
 def test_ladder_loosens_titles_then_keyword():
@@ -77,3 +81,22 @@ def test_company_size_applied_to_tiers_and_dropped_in_broad_fallback():
 def test_no_company_size_means_none_everywhere():
     plan = _build_leadcontact_query_plan(**WF15)
     assert all(p["company_size"] is None for p in plan)
+
+
+def test_multi_country_region_split_into_discrete_locations(monkeypatch):
+    # LeadContact expects a list of places, not one comma-joined blob string.
+    monkeypatch.setenv("LEADCONTACT_INDUSTRY_MAP", '{"bedding": "Textiles"}')
+    plan = _build_leadcontact_query_plan(
+        keywords="wholesale bedding sets, bedding sets factory",
+        target_role="Purchasing Manager, Buyer",
+        target_region="United Kingdom, Germany, France",
+        product_focus="microfiber bedding sets",
+    )
+    # Region blob is split into discrete countries.
+    assert plan[0]["locations"] == ["United Kingdom", "Germany", "France"]
+    # Distinctive single word from the keywords (not the multi-word phrase).
+    assert plan[0]["keyword"] == "bedding"
+    # The verified-winning combo exists: industry kept, titles dropped.
+    assert any(
+        p["industries"] == ["Textiles"] and p["job_titles"] is None for p in plan
+    )

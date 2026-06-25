@@ -168,7 +168,7 @@ export const translations: Record<Language, Record<string, string>> = {
     'Done': 'Done',
 
     // ── Common Actions ──
-    'Save': 'Save', 'Cancel': 'Cancel', 'Delete': 'Delete', 'Edit': 'Edit', 'Create': 'Create',
+    'Save': 'Save', 'Cancel': 'Cancel', 'Delete': 'Delete', 'Edit': 'Edit', 'Create': 'Create', 'Health': 'Health',
     'Close': 'Close', 'Confirm': 'Confirm', 'Export': 'Export',
     'Loading...': 'Loading...', 'No data': 'No data', 'Error': 'Error', 'Success': 'Success',
     'Are you sure': 'Are you sure you want to delete this?', 'This action cannot be undone': 'This action cannot be undone.',
@@ -623,7 +623,7 @@ export const translations: Record<Language, Record<string, string>> = {
     'Done': '已完成',
 
     // ── Common Actions ──
-    'Save': '保存', 'Cancel': '取消', 'Delete': '删除', 'Edit': '编辑', 'Create': '创建',
+    'Save': '保存', 'Cancel': '取消', 'Delete': '删除', 'Edit': '编辑', 'Create': '创建', 'Health': '健康',
     'Close': '关闭', 'Confirm': '确认', 'Search': '搜索', 'Export': '导出',
     'Loading...': '加载中...', 'No data': '暂无数据', 'Error': '错误', 'Success': '成功',
     'Are you sure': '确定要删除吗？', 'This action cannot be undone': '此操作不可撤销。',

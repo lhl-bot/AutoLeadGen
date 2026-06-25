@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
+import WorkflowHealthDialog from '@/components/WorkflowHealthDialog';
 import { apiFetch } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -165,6 +166,9 @@ export default function WorkflowsPage() {
   const [editingWorkflowId, setEditingWorkflowId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<WorkflowForm>(getDefaultWorkflowForm());
+
+  // Health dialog state
+  const [healthWorkflowId, setHealthWorkflowId] = useState<number | null>(null);
 
   // Engine Logs State
   const [isLogsOpen, setIsLogsOpen] = useState(false);
@@ -518,6 +522,9 @@ export default function WorkflowsPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Workflows')}</h1>
           <p className="mt-2 text-sm text-slate-500">{t('Set up automated pipelines for prospecting and outreach.')}</p>
         </div>
+
+        <WorkflowHealthDialog workflowId={healthWorkflowId} onClose={() => setHealthWorkflowId(null)} />
+
         <div className="flex flex-wrap gap-3">
           <Dialog open={isLogsOpen} onOpenChange={(open) => {
             setIsLogsOpen(open);
@@ -1068,6 +1075,13 @@ export default function WorkflowsPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+                    <Button
+                      onClick={() => setHealthWorkflowId(wf.id)}
+                      variant="outline"
+                      className="gap-2 w-24 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
+                    >
+                      <Activity className="w-4 h-4" /> {t('Health')}
+                    </Button>
                     <Button
                       onClick={() => openEditDialog(wf)}
                       variant="outline"

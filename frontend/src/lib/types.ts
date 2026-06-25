@@ -429,3 +429,22 @@ export interface CrmWebhook {
   last_delivered_at?: string | null
   created_at: string
 }
+
+export interface WorkflowHealth {
+  workflow: { id: number; name: string; status: string }
+  totals: { total_leads: number; with_email: number; without_email: number }
+  funnel: { found: number; drafted: number; sent: number; replied: number }
+  stuck: Array<{ status: string; count: number; reason: string }>
+  by_source: Record<string, number>
+  recent: { leads_24h: number; emails_sent_24h: number; last_lead_at: string | null }
+  providers: {
+    leadcontact: string
+    snovio: string
+    tavily: string
+    bocha: string
+    sender_accounts: number
+    email_require_verified: boolean
+    auto_send_drafts: boolean
+  }
+  warnings: string[]
+}

@@ -1731,6 +1731,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             wf = db.query(Workflow).filter(Workflow.id == wf_id).first()
             if not wf:
                 return {"status": "error", "error": "workflow_not_found", "source": "leadcontact"}
+            pool_id = wf.client_pool_id  # so new leads land in the workflow's client pool
             keywords = wf.search_keywords or ""
             target_role = wf.target_positions or ""
             target_region = wf.target_region or ""
@@ -1831,6 +1832,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             try:
                 lead = Lead(
                     workflow_id=wf_id,
+                    client_pool_id=pool_id,
                     email=emp_email if emp_email else None,
                     first_name=first,
                     last_name=last,

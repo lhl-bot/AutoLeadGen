@@ -1891,14 +1891,20 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             _leadcontact_cursor.pop(wf_id, None)
 
         if new_leads == 0:
-            # This keyword's pool is exhausted (all duplicates). Rotate to a
-            # different keyword next time, and back off briefly meanwhile.
+            # This keyword's pool is exhausted (all duplicates). Rotate to the next
+            # keyword. Only back off for long once we've cycled through ALL keywords
+            # without finding anything new — otherwise try the next keyword soon.
             _leadcontact_kw_rotation[wf_id] = kw_rotation + 1
-            cooldown = _int_env("LEADCONTACT_DEDUP_BACKOFF_SECONDS", 21600, 300, 604800)
+            num_kw = len(_distinctive_keywords(keywords, product_focus))
+            completed_cycle = num_kw <= 1 or (kw_rotation + 1) % num_kw == 0
+            if completed_cycle:
+                cooldown = _int_env("LEADCONTACT_DEDUP_BACKOFF_SECONDS", 21600, 300, 604800)
+            else:
+                cooldown = _int_env("LEADCONTACT_ROTATE_BACKOFF_SECONDS", 60, 0, 3600)
             _leadcontact_backoff_until[wf_id] = time.time() + cooldown
             logger.warning(
-                f"[LeadContact] workflow #{wf_id}: search returned {len(employees)} contacts "
-                f"but 0 new leads (all duplicates); rotating keyword + backing off {cooldown}s"
+                f"[LeadContact] workflow #{wf_id}: keyword '{single_kw}' exhausted "
+                f"({len(employees)} contacts, 0 new); rotating keyword, backing off {cooldown}s"
             )
     except Exception as e:
         logger.error(f"[LeadContact] Search stage error: {e}")

@@ -69,6 +69,9 @@ _leadcontact_backoff_until: Dict[int, float] = {}
 # Per-workflow LeadContact pagination cursor so each search fetches a NEW page
 # instead of re-paying for page 1. {wf_id: {"query": <attempt>, "token": <nextPageToken>}}
 _leadcontact_cursor: Dict[int, Dict[str, Any]] = {}
+# Per-workflow keyword rotation index — advanced when a keyword's pool is
+# exhausted so the next search tries a different distinctive word.
+_leadcontact_kw_rotation: Dict[int, int] = {}
 MAX_CONSECUTIVE_ERRORS = 5
 
 def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 100000) -> int:
@@ -1534,7 +1537,22 @@ def _distinctive_keyword(keywords: str, product_focus: str) -> str:
     return ""
 
 
-def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size=None):
+def _distinctive_keywords(keywords: str, product_focus: str) -> list:
+    """All distinctive single words (deduped, order-preserved) for keyword rotation.
+
+    Lets a search cycle through e.g. bedding -> towel -> curtain across ticks so we
+    keep finding NEW companies once one keyword's pool is exhausted.
+    """
+    seen = []
+    for src in (keywords, product_focus):
+        for w in re.split(r"[,\s]+", (src or "").lower()):
+            w = w.strip()
+            if len(w) > 2 and w not in _LC_GENERIC_KEYWORDS and w not in seen:
+                seen.append(w)
+    return seen
+
+
+def _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size=None, kw_rotation=0):
     """Ordered LeadContact search attempts, most specific first.
 
     The previous mapping over-constrained the query (a guessed industry label +
@@ -1551,9 +1569,15 @@ def _build_leadcontact_query_plan(keywords, target_role, target_region, product_
     job_titles = [t.strip() for t in re.split(r"[,;]", target_role) if t.strip()]
 
     # Single distinctive keyword — LeadContact returns 0 for multi-word phrases.
+    # Rotate through all distinctive words so successive searches cover bedding ->
+    # towel -> curtain etc. instead of re-hitting one exhausted keyword.
     kw_tokens = [k.strip() for k in re.split(r"[,;]", keywords) if k.strip()]
     primary_kw = kw_tokens[0] if kw_tokens else ""
-    single_kw = _distinctive_keyword(keywords, product_focus) or primary_kw
+    kw_list = _distinctive_keywords(keywords, product_focus)
+    if kw_list:
+        single_kw = kw_list[kw_rotation % len(kw_list)]
+    else:
+        single_kw = primary_kw
     # Alternate broad word from the product focus (e.g. "microfiber").
     focus_kw = ""
     if product_focus:
@@ -1749,7 +1773,8 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         # Relaxation ladder: try specific query first, loosen only if it returns 0.
         # Cursor pagination: when we already have a nextPageToken for a query, fetch
         # the NEXT page of that same query instead of re-paying for page 1.
-        plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size or None)
+        kw_rotation = _leadcontact_kw_rotation.get(wf_id, 0)
+        plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size or None, kw_rotation=kw_rotation)
         cursor = _leadcontact_cursor.get(wf_id)
         per_page = min(max_lc_leads, batch_lead_limit)
         employees = []
@@ -1781,6 +1806,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         if not employees:
             logger.info(f"[LeadContact] No employees found after {len(plan)} query tiers")
             _leadcontact_cursor.pop(wf_id, None)
+            _leadcontact_kw_rotation[wf_id] = kw_rotation + 1  # try a different keyword next time
             _leadcontact_backoff_until[wf_id] = time.time() + _int_env(
                 "LEADCONTACT_EMPTY_BACKOFF_SECONDS", 86400, 300, 604800
             )
@@ -1865,13 +1891,14 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             _leadcontact_cursor.pop(wf_id, None)
 
         if new_leads == 0:
-            # This page yielded only duplicates (e.g. cursor exhausted and we
-            # restarted at page 1). Back off so we stop re-paying for the same data.
+            # This keyword's pool is exhausted (all duplicates). Rotate to a
+            # different keyword next time, and back off briefly meanwhile.
+            _leadcontact_kw_rotation[wf_id] = kw_rotation + 1
             cooldown = _int_env("LEADCONTACT_DEDUP_BACKOFF_SECONDS", 21600, 300, 604800)
             _leadcontact_backoff_until[wf_id] = time.time() + cooldown
             logger.warning(
                 f"[LeadContact] workflow #{wf_id}: search returned {len(employees)} contacts "
-                f"but 0 new leads (all duplicates); backing off {cooldown}s to avoid wasted credits"
+                f"but 0 new leads (all duplicates); rotating keyword + backing off {cooldown}s"
             )
     except Exception as e:
         logger.error(f"[LeadContact] Search stage error: {e}")

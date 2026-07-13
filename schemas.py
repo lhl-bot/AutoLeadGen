@@ -174,6 +174,8 @@ class LeadBase(BaseModel):
     followup_count: int = 0
     last_reply_at: Optional[datetime] = None
     reply_snippet: Optional[str] = None
+    has_replied: bool = False
+    reply_intent: Optional[str] = None
     # Feedback & verification
     user_rating: Optional[str] = None
     email_verified: bool = False

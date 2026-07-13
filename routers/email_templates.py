@@ -10,10 +10,6 @@ from services.email_templates import render, lead_variables, find_missing_variab
 
 router = APIRouter(prefix="/api/email_templates", tags=["email_templates"])
 
-# Statuses that mean an email actually went out for a lead.
-_SENT_STATUSES = ("sent", "replied")
-
-
 def _owned_template(template_id: int, db: Session, user: models.User) -> models.EmailTemplate:
     query = db.query(models.EmailTemplate).filter(models.EmailTemplate.id == template_id)
     if not user.is_admin:
@@ -43,8 +39,8 @@ def list_templates(db: Session = Depends(get_db), user: models.User = Depends(ge
     rows = (
         db.query(
             models.Lead.template_id.label("template_id"),
-            func.sum(case((models.Lead.status.in_(_SENT_STATUSES), 1), else_=0)).label("sent"),
-            func.sum(case((models.Lead.status == "replied", 1), else_=0)).label("replied"),
+            func.sum(case((models.Lead.email_logs.any(models.EmailLog.direction == "outbound"), 1), else_=0)).label("sent"),
+            func.sum(case(((models.Lead.has_replied.is_(True)) | (models.Lead.status == "replied"), 1), else_=0)).label("replied"),
         )
         .filter(models.Lead.template_id.isnot(None))
         .group_by(models.Lead.template_id)

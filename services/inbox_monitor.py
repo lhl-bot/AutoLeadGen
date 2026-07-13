@@ -6,14 +6,18 @@ import time
 import logging
 from email.header import decode_header
 from email.utils import parseaddr
-import json
 from typing import Dict, Any, List
 import os
-from sqlalchemy import func
 from services.auth import decrypt_smtp_pass
 from database import SessionLocal, db_retry
 from models import EmailAccount, EmailLog, Lead
 from services.followup_engine import analyze_reply_intent, draft_followup_email
+from services.email_threads import (
+    canonical_inbound_message_id,
+    find_lead_for_bounce,
+    find_lead_for_inbound,
+    inbound_message_exists,
+)
 from services.suppression import suppress_lead
 from datetime import datetime, timezone, timedelta
 
@@ -237,30 +241,36 @@ def check_inbox_for_replies():
                             if isinstance(response_part, tuple):
                                 msg = email.message_from_bytes(response_part[1])
                                 
-                                # 1. Extract Message-ID and deduplicate
-                                msg_id = msg.get("Message-ID")
-                                if msg_id:
-                                    msg_id = msg_id.strip()
-                                    existing_log = db.query(EmailLog).filter(EmailLog.message_id == msg_id).first()
-                                    if existing_log:
-                                        continue  # Already processed this email
-                                
                                 # Extract sender email
                                 sender = _decode_header_value(msg.get("From") or "")
                                 sender_email = parseaddr(sender)[1] or sender.strip()
                                     
                                 reply_text = _get_text_from_email(msg)
                                 subject = _decode_header_value(msg.get("Subject", ""))
+                                msg_id = canonical_inbound_message_id(
+                                    msg.get("Message-ID"),
+                                    account_email=account.email,
+                                    sender_email=sender_email,
+                                    subject=subject,
+                                    date_header=msg.get("Date", ""),
+                                    body=reply_text,
+                                )
+                                if inbound_message_exists(
+                                    db,
+                                    account_email=account.email,
+                                    message_id=msg_id,
+                                ):
+                                    continue
 
                                 if _is_bounce(sender_email, subject, reply_text):
                                     bounced_recipients = _extract_bounced_recipients(msg, reply_text)
                                     lead = None
                                     for recipient in bounced_recipients:
-                                        lead = db.query(Lead).join(EmailLog).filter(
-                                            func.lower(Lead.email) == recipient,
-                                            EmailLog.direction == "outbound",
-                                            func.lower(EmailLog.to_email) == recipient,
-                                        ).order_by(EmailLog.sent_at.desc()).first()
+                                        lead = find_lead_for_bounce(
+                                            db,
+                                            account=account,
+                                            recipient_email=recipient,
+                                        )
                                         if lead:
                                             break
                                     if lead:
@@ -288,8 +298,15 @@ def check_inbox_for_replies():
                                         db.commit()
                                     continue
 
-                                # Find corresponding Lead
-                                lead = db.query(Lead).filter(Lead.email == sender_email).first()
+                                # Resolve by thread headers first, then mailbox-scoped
+                                # outbound history, never by a global lead-email match.
+                                lead = find_lead_for_inbound(
+                                    db,
+                                    account=account,
+                                    sender_email=sender_email,
+                                    in_reply_to=msg.get("In-Reply-To"),
+                                    references=msg.get("References"),
+                                )
                                 if lead:
                                     # Log inbound email first (always)
                                     db_log = EmailLog(
@@ -311,6 +328,8 @@ def check_inbox_for_replies():
                                     is_unsubscribe = any(kw in reply_lower for kw in _unsub_keywords)
                                     
                                     if is_unsubscribe:
+                                        lead.has_replied = True
+                                        lead.reply_intent = "unsubscribe"
                                         suppress_lead(db, lead, reason="unsubscribe", source="inbound_reply")
                                         lead.last_reply_at = datetime.now(timezone.utc)
                                         lead.reply_snippet = reply_text[:200]
@@ -318,23 +337,49 @@ def check_inbox_for_replies():
                                         db.commit()
                                         continue
                                     
-                                    # Update Lead as replied
+                                    # Persist the real customer reply before any AI call.
+                                    # Intent analysis/drafting is enrichment and must never
+                                    # make an already-received message disappear on failure.
                                     lead.status = "replied"
                                     lead.last_reply_at = datetime.now(timezone.utc)
                                     lead.reply_snippet = reply_text[:200]
-                                    
-                                    # AI Followup Analysis
-                                    analysis = analyze_reply_intent(reply_text)
-                                    intent = analysis.get("intent", "other")
-                                    
+                                    lead.has_replied = True
+                                    lead.reply_intent = lead.reply_intent or "other"
+                                    db.commit()
+
+                                    # AI intent enrichment is failure-isolated.
+                                    try:
+                                        analysis = analyze_reply_intent(reply_text)
+                                        intent = analysis.get("intent", "other")
+                                    except Exception as intent_error:
+                                        intent = "other"
+                                        logger.warning(
+                                            "Reply intent analysis failed for lead %s; preserving reply as other: %s",
+                                            lead.id,
+                                            intent_error,
+                                        )
+                                    lead.reply_intent = intent
+
                                     if intent == "not_interested":
                                         lead.status = "rejected"
-                                    elif intent in ["interested", "more_info"]:
-                                        draft = draft_followup_email({
-                                            "first_name": lead.first_name,
-                                            "company_name": lead.company_name
-                                        }, reply_text, intent)
-                                        lead.ai_draft = draft
+                                    db.commit()
+
+                                    if intent in ["interested", "more_info"]:
+                                        try:
+                                            draft = draft_followup_email({
+                                                "first_name": lead.first_name,
+                                                "company_name": lead.company_name
+                                            }, reply_text, intent)
+                                            lead.ai_draft = draft
+                                        except Exception as draft_error:
+                                            db.rollback()
+                                            logger.warning(
+                                                "Reply draft generation failed for lead %s; reply remains available: %s",
+                                                lead.id,
+                                                draft_error,
+                                            )
+                                            continue
+
                                         # Alert the owner about a high-intent reply.
                                         try:
                                             from services.notifications import notify, owner_id_for_lead
@@ -352,9 +397,15 @@ def check_inbox_for_replies():
                                             )
                                         except Exception:
                                             pass
-
-                                    db.commit()
+                                        db.commit()
                                     logger.info(f"[REPLY] Logged reply from {sender_email}. Status: {lead.status}. Msg ID: {msg_id}")
+                                else:
+                                    logger.info(
+                                        "No mailbox-scoped lead matched inbound message from %s to %s (Message-ID: %s)",
+                                        sender_email,
+                                        account.email,
+                                        msg_id,
+                                    )
                 mail.logout()
             except Exception as e:
                 logger.error(f"Error checking IMAP for {account.email}: {e}")

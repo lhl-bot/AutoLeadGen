@@ -336,9 +336,13 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
                     "退订", "取消订阅", "不要联系",
                 ]
                 if any(keyword in reply_lower for keyword in unsub_keywords):
+                    lead.has_replied = True
+                    lead.reply_intent = "unsubscribe"
                     suppress_lead(db, lead, reason="unsubscribe", source="unipile_message")
                 else:
                     lead.status = "replied"
+                    lead.has_replied = True
+                    lead.reply_intent = "other"
                 lead.reply_snippet = text
                 from datetime import datetime, timezone
                 lead.last_reply_at = datetime.now(timezone.utc)

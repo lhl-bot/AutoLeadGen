@@ -39,7 +39,7 @@ class OmnichannelRouter:
             last_update = lead.updated_at or lead.created_at or datetime.now(timezone.utc)
             hours_since_update = (datetime.now(timezone.utc) - last_update.replace(tzinfo=timezone.utc)).total_seconds() / 3600
 
-            if lead.status == "sent":
+            if lead.status == "sent" and not lead.has_replied:
                 # Email was sent. Check how long ago it was sent.
                 # If > 48 hours and no reply, escalate to LinkedIn
                 if hours_since_update > 48 and lead.linkedin_status == "unconnected" and lead.linkedin_url:
@@ -49,11 +49,11 @@ class OmnichannelRouter:
                 # LinkedIn connect request was sent. Check if it was accepted.
                 await self._check_linkedin_connection_status(lead)
             
-            elif lead.status == "replied":
+            elif lead.has_replied or lead.status == "replied":
                 # They replied to an email. Agent should handle via email followup engine.
                 pass
                 
-            elif lead.linkedin_status == "connected" and lead.status != "replied":
+            elif lead.linkedin_status == "connected" and not lead.has_replied and lead.status != "replied":
                 # They accepted LinkedIn request but haven't replied.
                 # Send WhatsApp if available, or LinkedIn message.
                 if hours_since_update > 72:

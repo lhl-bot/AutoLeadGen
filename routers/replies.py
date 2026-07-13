@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 import models
@@ -14,6 +14,7 @@ from services.auth import get_current_user, decrypt_smtp_pass
 from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.followup_engine import analyze_reply_intent, draft_followup_email
 from services.email_sender import send_email
+from services.email_threads import reply_thread_context
 from services.suppression import generate_unsubscribe_token, owner_id_for_lead, suppression_reason
 
 
@@ -60,12 +61,16 @@ def read_replies(
     Returns replied leads from the real database.
     Enriches reply_snippet from actual inbound EmailLog records.
     """
-    # ── 1) Fetch real replied leads ──────────────────────────────
+    # Reply history is a durable milestone, independent of the current
+    # automation status (which may already be drafted/sent again).
     query = db.query(models.Lead).outerjoin(
         models.Workflow, models.Workflow.id == models.Lead.workflow_id
     ).outerjoin(
         models.ClientPool, models.ClientPool.id == models.Lead.client_pool_id
-    ).filter(models.Lead.status == "replied")
+    ).filter(or_(
+        models.Lead.has_replied.is_(True),
+        models.Lead.status == "replied",  # compatibility before v15 backfill
+    ))
     if not user.is_admin:
         query = query.filter(or_(models.Workflow.user_id == user.id, models.ClientPool.user_id == user.id))
     replied_leads = query.order_by(models.Lead.updated_at.desc()).limit(limit).all()
@@ -76,9 +81,11 @@ def read_replies(
     if lead_ids:
         inbound_logs = (
             db.query(models.EmailLog)
+            .join(models.Lead, models.Lead.id == models.EmailLog.lead_id)
             .filter(
                 models.EmailLog.lead_id.in_(lead_ids),
                 models.EmailLog.direction == "inbound",
+                func.lower(models.EmailLog.from_email) == func.lower(models.Lead.email),
             )
             .order_by(models.EmailLog.sent_at.desc())
             .all()
@@ -121,9 +128,11 @@ def _lead_to_dict(
         "linkedin_url": lead.linkedin_url,
         "status": status_override or lead.status or "replied",
         "ai_draft": lead.ai_draft,
-        "followup_count": lead.followup_count or 1,
+        "followup_count": lead.followup_count or 0,
         "last_reply_at": reply_at,
         "reply_snippet": snippet_override or lead.reply_snippet or "",
+        "has_replied": bool(lead.has_replied or lead.status == "replied"),
+        "reply_intent": lead.reply_intent,
         "user_rating": lead.user_rating,
         "email_verified": lead.email_verified,
         "email_validation_status": lead.email_validation_status,
@@ -146,6 +155,7 @@ def generate_ai_draft(
     user: models.User = Depends(get_current_user),
 ):
     lead = _verify_reply_lead(lead_id, db, user)
+    credit_owner_id = owner_id_for_lead(db, lead)
 
     if not lead.reply_snippet:
         raise HTTPException(status_code=400, detail="No reply content to analyze")
@@ -154,7 +164,7 @@ def generate_ai_draft(
     try:
         consume_credits(
             db,
-            user.id,
+            credit_owner_id,
             "ai_reply_draft",
             description=f"AI reply draft for lead #{lead.id}",
             reference_type="lead",
@@ -166,8 +176,12 @@ def generate_ai_draft(
         analysis = analyze_reply_intent(lead.reply_snippet)
         intent = analysis.get("intent", "other")
         summary = analysis.get("summary", "")
+        lead.has_replied = True
+        lead.reply_intent = intent
 
         if intent == "not_interested":
+            lead.status = "rejected"
+            db.commit()
             return {
                 "intent": intent,
                 "summary": summary,
@@ -220,7 +234,7 @@ def generate_ai_draft(
         if charged:
             refund_credits(
                 db,
-                user.id,
+                credit_owner_id,
                 "ai_reply_draft",
                 description=f"Refund failed AI reply draft for lead #{lead.id}",
                 reference_type="lead",
@@ -248,22 +262,19 @@ async def send_ai_reply(
     if blocked_reason:
         raise HTTPException(status_code=400, detail=f"Recipient is suppressed: {blocked_reason}")
 
-    # Find email account via workflow
+    # Resolve the exact mailbox and RFC thread used by the conversation.
     if not lead.workflow_id:
         raise HTTPException(status_code=400, detail="Lead has no associated workflow")
 
-    workflow_email_query = db.query(models.WorkflowEmail).join(models.EmailAccount).filter(
-        models.WorkflowEmail.workflow_id == lead.workflow_id
-    )
-    if not user.is_admin:
-        workflow_email_query = workflow_email_query.filter(models.EmailAccount.user_id == user.id)
-    workflow_email = workflow_email_query.first()
-    if not workflow_email:
-        raise HTTPException(status_code=400, detail="No email account configured for this workflow")
-
-    account = workflow_email.email_account
+    thread = reply_thread_context(db, lead)
+    if thread.original_sender_missing:
+        raise HTTPException(
+            status_code=409,
+            detail="The original sender account is no longer bound to this workflow. Rebind it before replying.",
+        )
+    account = thread.account
     if not account:
-        raise HTTPException(status_code=400, detail="Email account not found")
+        raise HTTPException(status_code=400, detail="No email account configured for this workflow")
 
     # Parse subject and body from draft
     lines = req.draft.split('\n')
@@ -309,7 +320,7 @@ async def send_ai_reply(
     try:
         consume_credits(
             db,
-            user.id,
+            owner_id,
             "email_send",
             description=f"Reply email send to {lead.email}",
             reference_type="lead",
@@ -334,6 +345,8 @@ async def send_ai_reply(
             body_text=body,
             sender_name=account.display_name or account.email.split('@')[0],
             reply_to=account.email,
+            in_reply_to=thread.in_reply_to,
+            references=thread.references,
             list_unsubscribe_url=unsubscribe_url,
         )
     except InsufficientCreditsError as exc:
@@ -342,7 +355,7 @@ async def send_ai_reply(
         if charged:
             refund_credits(
                 db,
-                user.id,
+                owner_id,
                 "email_send",
                 description=f"Refund failed reply email send to {lead.email}",
                 reference_type="lead",
@@ -354,7 +367,7 @@ async def send_ai_reply(
         if charged:
             refund_credits(
                 db,
-                user.id,
+                owner_id,
                 "email_send",
                 description=f"Refund failed reply email send to {lead.email}",
                 reference_type="lead",
@@ -375,9 +388,15 @@ async def send_ai_reply(
     db.add(log_entry)
     lead.ai_draft = req.draft
     lead.status = "sent"
+    lead.has_replied = True
     db.commit()
 
-    return {"ok": True, "message_id": res.get("message_id")}
+    return {
+        "ok": True,
+        "message_id": res.get("message_id"),
+        "from_email": account.email,
+        "in_reply_to": thread.in_reply_to,
+    }
 
 
 def _public_base_url() -> str:

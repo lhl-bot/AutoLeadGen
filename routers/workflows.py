@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload, subqueryload
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_
 from typing import List
 import os
 
@@ -68,7 +68,7 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
                    COUNT(id) AS total,
                    SUM(CASE WHEN email IS NOT NULL AND email <> '' AND status NOT IN ('bounced', 'rejected', 'invalid_email', 'unsubscribed', 'low_score', 'needs_email') THEN 1 ELSE 0 END) AS contactable,
                    SUM(CASE WHEN status = 'needs_email' THEN 1 ELSE 0 END) AS needs_email,
-                   SUM(status = 'replied') AS replied,
+                   SUM(CASE WHEN has_replied = 1 OR status = 'replied' THEN 1 ELSE 0 END) AS replied,
                    SUM(status = 'bounced') AS bounced,
                    SUM(status = 'low_score') AS low_score,
                    AVG(fit_score) AS avg_fit_score,
@@ -349,11 +349,11 @@ def get_workflow_pilot_report(
                 1,
             ), else_=0)).label("valid_emails"),
             func.sum(case((
-                models.Lead.status.in_(("sent", "replied")),
+                models.Lead.email_logs.any(models.EmailLog.direction == "outbound"),
                 1,
             ), else_=0)).label("contacted"),
             func.sum(case((
-                models.Lead.status == "replied",
+                or_(models.Lead.has_replied.is_(True), models.Lead.status == "replied"),
                 1,
             ), else_=0)).label("replied"),
             func.sum(case((
@@ -362,7 +362,8 @@ def get_workflow_pilot_report(
             ), else_=0)).label("handoff"),
             func.sum(case((
                 or_(
-                    models.Lead.status == "replied",
+                    models.Lead.reply_intent.in_(("interested", "more_info")),
+                    and_(models.Lead.status == "replied", models.Lead.reply_intent.is_(None)),
                     models.Lead.handoff_recommended.is_(True),
                 ),
                 1,

@@ -72,10 +72,22 @@ def test_create_and_reply_rate_stats(db_session):
     db_session.add(pool)
     db_session.flush()
     # 3 sent on this template, 1 of which replied.
-    for status in ("sent", "sent", "replied"):
-        db_session.add(models.Lead(
+    leads = []
+    for index in range(3):
+        lead = models.Lead(
             client_pool_id=pool.id, domain="x.example", email="a@x.example",
-            status=status, template_id=tpl.id, template_variant="A",
+            status="sent", template_id=tpl.id, template_variant="A",
+            has_replied=index == 2,
+        )
+        leads.append(lead)
+        db_session.add(lead)
+    db_session.flush()
+    for lead in leads:
+        db_session.add(models.EmailLog(
+            lead_id=lead.id,
+            direction="outbound",
+            from_email="sender@example.com",
+            to_email=lead.email,
         ))
     db_session.flush()
 

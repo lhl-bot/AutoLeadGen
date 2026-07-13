@@ -90,7 +90,10 @@ def get_dashboard_stats(db: Session = Depends(get_db), user: models.User = Depen
     active_workflows = workflow_q().filter(models.Workflow.status == "active").count()
     total_leads = lead_q().count()
     emails_sent = email_q().filter(models.EmailLog.direction == "outbound").count()
-    total_replies = email_q().filter(models.EmailLog.direction == "inbound").count()
+    total_replies = lead_q().filter(or_(
+        models.Lead.has_replied.is_(True),
+        models.Lead.status == "replied",
+    )).count()
 
     # 2. Timeseries (last 14 days), aggregated in SQL — no full-table load.
     dates = [(now - timedelta(days=i)).date() for i in range(13, -1, -1)]
@@ -125,13 +128,20 @@ def get_dashboard_stats(db: Session = Depends(get_db), user: models.User = Depen
     emails_sent_today = email_q().filter(
         models.EmailLog.direction == "outbound", models.EmailLog.sent_at >= today_start
     ).count()
-    high_intent_replies = email_q().filter(
-        models.EmailLog.direction == "inbound", models.EmailLog.sent_at >= today_start
+    high_intent_replies = lead_q().filter(
+        or_(
+            models.Lead.reply_intent.in_(("interested", "more_info")),
+            models.Lead.status == "replied",
+        ),
+        models.Lead.last_reply_at >= today_start,
     ).count()
 
     recent_replied = (
         lead_q()
-        .filter(models.Lead.last_reply_at.isnot(None))
+        .filter(
+            or_(models.Lead.has_replied.is_(True), models.Lead.status == "replied"),
+            models.Lead.last_reply_at.isnot(None),
+        )
         .order_by(models.Lead.last_reply_at.desc())
         .limit(3)
         .all()
@@ -187,8 +197,11 @@ def get_funnel(
     found = base.count()
     with_email = base.filter(models.Lead.email.isnot(None), models.Lead.email != "").count()
     drafted = base.filter(models.Lead.status.in_(_DRAFTED_OR_BEYOND)).count()
-    sent = base.filter(models.Lead.status.in_(_SENT_OR_BEYOND)).count()
-    replied = base.filter(models.Lead.status == "replied").count()
+    sent = base.filter(models.Lead.email_logs.any(models.EmailLog.direction == "outbound")).count()
+    replied = base.filter(or_(
+        models.Lead.has_replied.is_(True),
+        models.Lead.status == "replied",
+    )).count()
 
     return {
         "stages": [

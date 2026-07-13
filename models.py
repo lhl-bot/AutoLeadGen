@@ -184,6 +184,10 @@ class Lead(Base):
     followup_count = Column(Integer, default=0)
     last_reply_at = Column(DateTime, nullable=True)
     reply_snippet = Column(Text, nullable=True)
+    # Durable reply milestone, independent of the mutable automation status.
+    # A lead can move replied -> drafted -> sent while this remains true.
+    has_replied = Column(Boolean, default=False, nullable=False, index=True)
+    reply_intent = Column(String(50), nullable=True, doc="interested, more_info, not_interested, unsubscribe, other")
     
     # Feedback & verification fields
     user_rating = Column(String(20), nullable=True, doc="User feedback: positive, negative")

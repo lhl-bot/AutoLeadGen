@@ -128,8 +128,8 @@ def read_client_pools(skip: int = 0, limit: int = 100, db: Session = Depends(get
         db.query(
             models.Lead.client_pool_id,
             func.count(models.Lead.id).label("total"),
-            func.sum(case((models.Lead.status.in_(["sent", "replied"]), 1), else_=0)).label("contacted"),
-            func.sum(case((models.Lead.status == "replied", 1), else_=0)).label("replied"),
+            func.sum(case((models.Lead.email_logs.any(models.EmailLog.direction == "outbound"), 1), else_=0)).label("contacted"),
+            func.sum(case((or_(models.Lead.has_replied.is_(True), models.Lead.status == "replied"), 1), else_=0)).label("replied"),
         )
         .filter(models.Lead.client_pool_id.isnot(None))
         .group_by(models.Lead.client_pool_id)
@@ -288,8 +288,8 @@ def read_client_pool(pool_id: int, db: Session = Depends(get_db), user: models.U
     stats = (
         db.query(
             func.count(models.Lead.id).label("total"),
-            func.sum(case((models.Lead.status.in_(["sent", "replied"]), 1), else_=0)).label("contacted"),
-            func.sum(case((models.Lead.status == "replied", 1), else_=0)).label("replied"),
+            func.sum(case((models.Lead.email_logs.any(models.EmailLog.direction == "outbound"), 1), else_=0)).label("contacted"),
+            func.sum(case((or_(models.Lead.has_replied.is_(True), models.Lead.status == "replied"), 1), else_=0)).label("replied"),
         )
         .filter(models.Lead.client_pool_id == pool.id)
         .first()

@@ -76,7 +76,9 @@ def build_persona_few_shot(db: Session, persona_id: int) -> str:
                 models.Workflow.persona_id == persona_id,
                 models.Lead.ai_draft.isnot(None),
                 models.Lead.ai_draft != "",
-                (models.Lead.user_rating == 'positive') | (models.Lead.status == 'replied')
+                (models.Lead.user_rating == 'positive')
+                | (models.Lead.reply_intent.in_(("interested", "more_info")))
+                | ((models.Lead.status == 'replied') & (models.Lead.reply_intent.is_(None)))
             )
             .order_by(models.Lead.id.desc())
             .limit(2)
@@ -382,4 +384,3 @@ RULES:
     except Exception as e:
         logger.error(f"Error generating search keywords: {e}")
         return []
-

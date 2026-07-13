@@ -79,7 +79,7 @@ def test_deliverability_summary_aggregates_status_and_risk_domains(db_session):
 
 def test_pilot_report_uses_aggregated_metrics(db_session):
     user, workflow, pool = _seed_user_workflow_pool(db_session)
-    db_session.add_all([
+    leads = [
         models.Lead(
             workflow_id=workflow.id,
             client_pool_id=pool.id,
@@ -87,7 +87,9 @@ def test_pilot_report_uses_aggregated_metrics(db_session):
             email="one@example.com",
             email_verified=True,
             fit_score=80,
-            status="replied",
+            status="sent",
+            has_replied=True,
+            reply_intent="interested",
             handoff_recommended=True,
             source_channel="apollo",
         ),
@@ -109,6 +111,22 @@ def test_pilot_report_uses_aggregated_metrics(db_session):
             status="found",
             handoff_recommended=True,
             source_channel=None,
+        ),
+    ]
+    db_session.add_all(leads)
+    db_session.flush()
+    db_session.add_all([
+        models.EmailLog(
+            lead_id=leads[0].id,
+            direction="outbound",
+            from_email="sender@example.com",
+            to_email=leads[0].email,
+        ),
+        models.EmailLog(
+            lead_id=leads[1].id,
+            direction="outbound",
+            from_email="sender@example.com",
+            to_email=leads[1].email,
         ),
     ])
     db_session.commit()

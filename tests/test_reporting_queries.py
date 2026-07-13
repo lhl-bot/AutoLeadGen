@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import models
 from routers.client_pools import read_pool_leads
 from routers.email_logs import deliverability_summary
-from routers.workflows import get_workflow_pilot_report
+from routers.workflows import get_workflow_pilot_report, read_workflows
 
 
 def _seed_user_workflow_pool(db):
@@ -142,6 +142,37 @@ def test_pilot_report_uses_aggregated_metrics(db_session):
     assert report.high_intent_count == 2
     assert report.avg_fit_score == 60
     assert report.top_channels == ["apollo: 2", "unknown: 1"]
+
+
+def test_workflow_list_treats_zero_bounce_threshold_as_disabled(db_session, monkeypatch):
+    user, workflow, pool = _seed_user_workflow_pool(db_session)
+    lead = models.Lead(
+        workflow_id=workflow.id,
+        client_pool_id=pool.id,
+        domain="risk.example",
+        email="buyer@risk.example",
+        status="bounced",
+    )
+    db_session.add(lead)
+    db_session.flush()
+    db_session.add(models.EmailLog(
+        lead_id=lead.id,
+        direction="outbound",
+        from_email="sender@example.com",
+        to_email=lead.email,
+    ))
+    db_session.commit()
+    monkeypatch.setenv("EMAIL_MIN_SENT_FOR_BOUNCE_PAUSE", "1")
+    monkeypatch.setenv("EMAIL_BOUNCE_RATE_PAUSE_THRESHOLD", "0")
+
+    disabled = read_workflows(db=db_session, user=user)
+
+    assert disabled[0]["email_paused"] is False
+
+    monkeypatch.setenv("EMAIL_BOUNCE_RATE_PAUSE_THRESHOLD", "0.5")
+    enabled = read_workflows(db=db_session, user=user)
+
+    assert enabled[0]["email_paused"] is True
 
 
 def test_pool_leads_supports_server_side_search_and_pagination(db_session):

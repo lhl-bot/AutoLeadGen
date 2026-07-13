@@ -135,7 +135,11 @@ def read_workflows(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
             min_sent_for_pause = int(os.environ.get("EMAIL_MIN_SENT_FOR_BOUNCE_PAUSE", "20"))
         except (TypeError, ValueError):
             min_sent_for_pause = 20
-        email_paused = outbound_count >= min_sent_for_pause and bounce_rate >= pause_threshold
+        email_paused = (
+            pause_threshold > 0
+            and outbound_count >= min_sent_for_pause
+            and bounce_rate >= pause_threshold
+        )
         results.append({
             "id": r["id"], "name": r["name"], "status": r["status"],
             "search_keywords": r["search_keywords"], "target_positions": r["target_positions"],

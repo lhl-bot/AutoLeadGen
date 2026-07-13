@@ -159,6 +159,11 @@ export default function RepliesPage() {
                             {reply.status}
                           </span>
                         )}
+                        {reply.reply_intent && (
+                          <Badge variant="secondary" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+                            {reply.reply_intent}
+                          </Badge>
+                        )}
                         {reply.fit_grade && (
                           <Badge variant="secondary" className="bg-sky-500/10 text-sky-400 border-sky-500/20">
                             Fit {reply.fit_grade} · {reply.fit_score ?? '—'}

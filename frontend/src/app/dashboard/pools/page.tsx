@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
 import { Database, Plus, RefreshCw, Trash2, Download, Search, Mail as MailIcon, ThumbsUp, ThumbsDown, ShieldCheck, ShieldAlert, ShieldX, Copy, Check, User, Building, Target, Zap, Sparkles, FileText, Upload, FileSpreadsheet, AlertCircle } from 'lucide-react';
@@ -460,10 +460,22 @@ export default function PoolsPage() {
     setSendDraftMessage('');
     setIsBriefLoading(true);
     try {
-      let res = await apiFetch(`/api/leads/${lead.id}/brief`);
+      let currentLead = lead;
+      const leadRes = await apiFetch(`/api/leads/${lead.id}`);
+      if (leadRes.ok) {
+        currentLead = await leadRes.json();
+        setSelectedLead(currentLead);
+      }
+
+      if (!currentLead.domain) {
+        setBriefError(txt('No domain/website is available for AI research on this lead.', '该客户没有域名/网站，暂时无法生成 AI 背景调研。'));
+        return;
+      }
+
+      let res = await apiFetch(`/api/leads/${currentLead.id}/brief`);
       // No brief yet — run AI deep-research on demand to generate one.
       if (res.status === 404) {
-        res = await apiFetch(`/api/leads/${lead.id}/brief`, { method: 'POST' });
+        res = await apiFetch(`/api/leads/${currentLead.id}/brief`, { method: 'POST' });
       }
       if (res.ok) {
         const data = await res.json();
@@ -1221,8 +1233,8 @@ export default function PoolsPage() {
           <DialogHeader className="px-6 pt-5 pb-4 border-b border-slate-100 shrink-0">
             <DialogTitle className="flex flex-col gap-1 pr-8">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Lead AI Research Brief', '客户 AI 背景调研简介')}</span>
+                <User className="w-5 h-5 text-indigo-600" />
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Lead Details', '客户详细信息')}</span>
               </div>
               <div className="mt-1 text-2xl font-bold text-slate-900">
                 {[selectedLead?.first_name, selectedLead?.last_name].filter(Boolean).join(' ') || (
@@ -1250,18 +1262,102 @@ export default function PoolsPage() {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            {selectedLead && (
+              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                      <User className="h-4 w-4 text-indigo-600" /> {txt('Lead Details', '客户详细信息')}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {txt('Basic contact, qualification, and outreach state are shown even when no AI brief exists.', '即使尚未生成 AI 背景调研，也会先展示基础联系人、评分和触达状态。')}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className={statusBadgeClass(selectedLead.status)}>
+                      {selectedLead.status}
+                    </Badge>
+                    {selectedLead.fit_grade && (
+                      <Badge variant="secondary" className={fitBadgeClass(selectedLead.fit_grade)}>
+                        {txt('Fit', '匹配')} {selectedLead.fit_grade} · {selectedLead.fit_score ?? '—'}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                  <DetailField label={txt('Contact', '联系人')} value={[selectedLead.first_name, selectedLead.last_name].filter(Boolean).join(' ') || '—'} />
+                  <DetailField label={txt('Company', '公司')} value={selectedLead.company_name || '—'} />
+                  <DetailField label={txt('Role', '职位')} value={selectedLead.job_title || '—'} />
+                  <DetailField
+                    label={txt('Email', '邮箱')}
+                    value={selectedLead.email ? (
+                      <a href={`mailto:${selectedLead.email}`} className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.email}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField
+                    label={txt('Domain / Website', '域名 / 网站')}
+                    value={selectedLead.domain ? (
+                      <a href={`https://${selectedLead.domain}`} target="_blank" rel="noopener noreferrer" className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.domain}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField
+                    label={txt('LinkedIn', '领英')}
+                    value={selectedLead.linkedin_url ? (
+                      <a href={selectedLead.linkedin_url} target="_blank" rel="noopener noreferrer" className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.linkedin_url}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField label={txt('Email status', '邮箱验证')} value={selectedLead.email_verified ? txt('Verified', '已验证') : (selectedLead.email_validation_status || '—')} />
+                  <DetailField label={txt('Source', '来源')} value={selectedLead.source_channel || '—'} />
+                  <DetailField label={txt('Follow-ups', '跟进次数')} value={String(selectedLead.followup_count ?? 0)} />
+                  <DetailField label={txt('Added', '添加时间')} value={selectedLead.created_at ? formatDate(selectedLead.created_at) : '—'} />
+                  <DetailField label={txt('Updated', '更新时间')} value={selectedLead.updated_at ? formatDate(selectedLead.updated_at) : '—'} />
+                  <DetailField label={txt('Last reply', '最后回复')} value={selectedLead.last_reply_at ? formatRelative(selectedLead.last_reply_at) : '—'} />
+                </div>
+
+                {(selectedLead.qualification_notes || selectedLead.reply_snippet || selectedLead.data_sources) && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                    {selectedLead.qualification_notes && (
+                      <TextBlock label={txt('Qualification notes', '匹配依据')} value={selectedLead.qualification_notes} />
+                    )}
+                    {selectedLead.reply_snippet && (
+                      <TextBlock label={txt('Reply snippet', '回复摘要')} value={selectedLead.reply_snippet} />
+                    )}
+                    {selectedLead.data_sources && (
+                      <TextBlock label={txt('Data sources', '数据来源')} value={selectedLead.data_sources} />
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {isBriefLoading ? (
               <div className="flex flex-col items-center justify-center py-24 space-y-4">
                 <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
                 <p className="text-sm text-slate-500 font-medium animate-pulse">{txt('Running AI deep-research & fetching client brief...', '正在进行 AI 背景调研并获取简介...')}</p>
               </div>
             ) : briefError ? (
-              <div className="text-center py-20">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-3">
-                  <FileText className="w-6 h-6" />
+              <div className="rounded-lg border border-amber-100 bg-amber-50/70 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-amber-600 ring-1 ring-amber-100">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-amber-900">
+                      {txt('AI research brief unavailable', 'AI 背景调研暂不可用')}
+                    </h3>
+                    <p className="mt-1 text-sm text-amber-800">{briefError}</p>
+                    <p className="mt-1 text-xs text-amber-700/80">
+                      {txt('Add a domain or website to this lead, then run AI research again.', '给该客户补充域名或网站后，再运行 AI 背景调研。')}
+                    </p>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-600 font-medium">{briefError}</p>
-                <p className="text-xs text-slate-400 mt-2">{txt('AI will scan the website and generate a brief when you run a workflow.', '当运行工作流开发客户时，AI 会自动浏览其网站并生成此简介。')}</p>
                 {selectedLead?.ai_draft && (
                   <div className="mt-8 text-left border-t border-slate-100 pt-6">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1501,6 +1597,26 @@ function formatRelative(iso: string) {
   } catch {
     return '—';
   }
+}
+
+function DetailField({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-1 min-h-[20px] break-words text-sm text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+function TextBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <p className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">
+        {value}
+      </p>
+    </div>
+  );
 }
 
 function ImportMetric({

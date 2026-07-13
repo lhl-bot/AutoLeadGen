@@ -78,10 +78,12 @@ export default function DashboardOverview() {
     };
 
     fetchAnalytics();
+    const analyticsTimer = window.setInterval(fetchAnalytics, 30_000);
     const healthTimer = window.setTimeout(fetchHealth, 1000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(analyticsTimer);
       window.clearTimeout(healthTimer);
     };
   }, []);

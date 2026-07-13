@@ -110,6 +110,8 @@ export interface Lead {
   followup_count?: number
   last_reply_at?: string | null
   reply_snippet?: string | null
+  has_replied?: boolean
+  reply_intent?: string | null
   // Feedback & verification
   user_rating?: string | null
   email_verified?: boolean
@@ -432,13 +434,25 @@ export interface CrmWebhook {
 
 export interface WorkflowHealth {
   workflow: { id: number; name: string; status: string }
-  totals: { total_leads: number; with_email: number; without_email: number }
+  totals: {
+    total_leads: number
+    with_email: number
+    usable_email: number
+    without_email: number
+    needs_email: number
+    invalid_email: number
+    bounced: number
+    leadcontact_leads: number
+    leadcontact_without_email: number
+    leadcontact_usable_email: number
+  }
   funnel: { found: number; drafted: number; sent: number; replied: number }
   stuck: Array<{ status: string; count: number; reason: string }>
   by_source: Record<string, number>
   recent: { leads_24h: number; emails_sent_24h: number; last_lead_at: string | null }
   providers: {
     leadcontact: string
+    leadcontact_remaining_points: number | null
     snovio: string
     tavily: string
     bocha: string

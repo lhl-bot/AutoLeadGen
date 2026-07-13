@@ -70,10 +70,13 @@ export default function WorkflowHealthDialog({ workflowId, onClose }: { workflow
             )}
 
             {/* Totals */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {[
                 { label: txt('Total leads', '线索总数'), value: data.totals.total_leads },
                 { label: txt('With email', '有邮箱'), value: data.totals.with_email },
+                { label: txt('Usable email', '可用邮箱'), value: data.totals.usable_email },
+                { label: txt('Needs email', '缺邮箱'), value: data.totals.needs_email },
+                { label: txt('LC usable', 'LC可用'), value: data.totals.leadcontact_usable_email },
                 { label: txt('Sent 24h', '24h 已发'), value: data.recent.emails_sent_24h },
               ].map((s, i) => (
                 <div key={i} className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-center">
@@ -126,9 +129,12 @@ export default function WorkflowHealthDialog({ workflowId, onClose }: { workflow
               <div className="flex flex-wrap gap-2">
                 {Object.entries(PROVIDER_LABELS).map(([key, label]) => {
                   const ok = (data.providers as Record<string, unknown>)[key] === 'configured';
+                  const suffix = key === 'leadcontact' && data.providers.leadcontact_remaining_points != null
+                    ? ` (${data.providers.leadcontact_remaining_points})`
+                    : '';
                   return (
                     <span key={key} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
-                      {ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {label}
+                      {ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />} {label}{suffix}
                     </span>
                   );
                 })}

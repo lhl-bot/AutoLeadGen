@@ -129,3 +129,44 @@ def test_select_sender_account_returns_next_available_after_capped_account(db_se
 
     assert selection.account.email == accounts[1].email
     assert selection.capped_accounts == [(accounts[0].email, 1)]
+
+
+def test_select_sender_account_keeps_preferred_thread_sender(db_session):
+    workflow, accounts, lead = _seed_workflow_with_accounts(db_session)
+    _email_log(
+        db_session,
+        lead,
+        accounts[0].email,
+        datetime(2026, 6, 5, 9, tzinfo=timezone.utc),
+    )
+
+    selection = select_sender_account(
+        db_session,
+        workflow,
+        per_account_daily_cap=10,
+        preferred_email=accounts[0].email,
+        now=datetime(2026, 6, 5, 12, tzinfo=timezone.utc),
+    )
+
+    assert selection.account.email == accounts[0].email
+
+
+def test_select_sender_account_does_not_switch_thread_when_preferred_is_capped(db_session):
+    workflow, accounts, lead = _seed_workflow_with_accounts(db_session)
+    _email_log(
+        db_session,
+        lead,
+        accounts[0].email,
+        datetime(2026, 6, 5, 9, tzinfo=timezone.utc),
+    )
+
+    selection = select_sender_account(
+        db_session,
+        workflow,
+        per_account_daily_cap=1,
+        preferred_email=accounts[0].email,
+        now=datetime(2026, 6, 5, 12, tzinfo=timezone.utc),
+    )
+
+    assert selection.account is None
+    assert selection.capped_accounts == [(accounts[0].email, 1)]

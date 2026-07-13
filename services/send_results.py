@@ -41,10 +41,13 @@ def record_send_failure(
     db: Session,
     lead: Lead,
     *,
+    message: Optional[str] = None,
     max_failures: int = 3,
 ) -> SendFailureUpdate:
     lead.send_fail_count = (lead.send_fail_count or 0) + 1
     permanently_failed = lead.send_fail_count >= max_failures
+    if message:
+        lead.reply_snippet = f"Send failed (attempt {lead.send_fail_count}/{max_failures}): {message}"
     if permanently_failed:
         lead.status = "send_failed"
     db.commit()

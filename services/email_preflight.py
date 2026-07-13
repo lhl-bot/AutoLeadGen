@@ -14,6 +14,7 @@ from services.suppression import owner_id_for_lead, suppression_reason
 EMAIL_RE = re.compile(r"^[A-Z0-9._%+\-']+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
 MOCK_FIRST_NAMES = {"alex", "sam", "jordan", "taylor", "morgan", "casey"}
 MOCK_LAST_NAMES = {"smith", "johnson", "williams", "brown", "jones", "garcia"}
+VERIFIED_EMAIL_STATUSES = {"valid", "verified"}
 
 _domain_resolution_cache: TTLCache = TTLCache(maxsize=10000, ttl=3600)
 _mx_record_cache: TTLCache = TTLCache(maxsize=10000, ttl=3600)
@@ -94,8 +95,11 @@ def validate_lead_before_send(lead: Lead, db: Optional[Session] = None) -> Optio
         return "invalid_email_format"
     if _bool_env("EMAIL_SKIP_GENERATED_MOCK_EMAILS", True) and looks_like_generated_mock_email(email):
         return "suspected_generated_mock_email"
-    if getattr(lead, "email_validation_status", None) == "invalid":
+    v_status = getattr(lead, "email_validation_status", None)
+    if v_status == "invalid":
         return "email_pre_verified_invalid"
+    if _bool_env("EMAIL_REQUIRE_VERIFIED", True) and v_status not in VERIFIED_EMAIL_STATUSES:
+        return f"email_not_verified({v_status})"
     domain = email_domain(email)
     if _bool_env("EMAIL_CHECK_RECIPIENT_DOMAIN_DNS", True) and not domain_resolves(domain):
         return "recipient_domain_does_not_resolve"
@@ -113,7 +117,7 @@ def quality_gate_reason(lead: Lead) -> Optional[str]:
 
     if _bool_env("EMAIL_REQUIRE_VERIFIED", True):
         v_status = getattr(lead, "email_validation_status", None)
-        if v_status is not None and v_status not in ("valid", "catch-all"):
+        if v_status not in VERIFIED_EMAIL_STATUSES:
             return f"email_not_verified({v_status})"
     return None
 

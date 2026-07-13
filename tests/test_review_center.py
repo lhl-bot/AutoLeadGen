@@ -133,3 +133,31 @@ def test_bulk_send_isolates_failures_and_preserves_ownership(db_session, monkeyp
     assert result["failed"] == 2
     assert sendable.status == "sent"
     assert other.status == "drafted"
+
+
+def test_bulk_send_reports_send_result_message(db_session, monkeypatch):
+    owner, _, workflow, _ = _seed_owner(db_session)
+    blocked = models.Lead(
+        workflow_id=workflow.id,
+        domain="blocked.example",
+        email="buyer@blocked.example",
+        status="drafted",
+        ai_draft="Hi",
+    )
+    db_session.add(blocked)
+    db_session.commit()
+
+    async def fake_send(lead, _workflow, db, raise_on_credit_error=False):
+        return {"success": False, "message": "All active sender email accounts have reached their daily caps"}
+
+    monkeypatch.setattr("services.outbound_engine.send_lead_email", fake_send)
+
+    result = asyncio.run(bulk_send_reviewed_drafts(
+        BulkLeadRequest(lead_ids=[blocked.id]),
+        db_session,
+        owner,
+    ))
+
+    assert result["succeeded"] == 0
+    assert result["failed"] == 1
+    assert result["results"][0]["message"] == "All active sender email accounts have reached their daily caps"

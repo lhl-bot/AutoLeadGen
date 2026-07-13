@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import case, func, or_
+from sqlalchemy import and_, case, func, or_
 from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -42,6 +42,14 @@ def _owned_leads_query(db: Session, user: models.User):
             models.ClientPool.user_id == user.id,
         ))
     return query
+
+
+def _send_result_message(lead: models.Lead, send_result) -> str:
+    if lead.status == "sent":
+        return "Sent"
+    if isinstance(send_result, dict) and send_result.get("message"):
+        return str(send_result["message"])
+    return lead.reply_snippet or "Send was not completed"
 
 
 @router.get("", response_model=List[schemas.Lead])
@@ -119,7 +127,8 @@ def review_center(
             func.sum(case((models.Lead.status == "send_failed", 1), else_=0)).label("send_failed"),
             func.sum(case((
                 or_(
-                    models.Lead.status == "replied",
+                    models.Lead.reply_intent.in_(("interested", "more_info")),
+                    and_(models.Lead.status == "replied", models.Lead.reply_intent.is_(None)),
                     models.Lead.handoff_recommended.is_(True),
                 ),
                 1,
@@ -153,7 +162,8 @@ def review_center(
             "needs_email": queue(models.Lead.status == "needs_email"),
             "send_failed": queue(models.Lead.status == "send_failed"),
             "high_intent": queue(or_(
-                models.Lead.status == "replied",
+                models.Lead.reply_intent.in_(("interested", "more_info")),
+                and_(models.Lead.status == "replied", models.Lead.reply_intent.is_(None)),
                 models.Lead.handoff_recommended.is_(True),
             )),
         },
@@ -330,13 +340,13 @@ async def bulk_send_reviewed_drafts(
             continue
 
         try:
-            await send_lead_email(lead, workflow, db, raise_on_credit_error=True)
+            send_result = await send_lead_email(lead, workflow, db, raise_on_credit_error=True)
             db.refresh(lead)
             results.append({
                 "lead_id": lead_id,
                 "ok": lead.status == "sent",
                 "status": lead.status,
-                "message": "Sent" if lead.status == "sent" else (lead.reply_snippet or "Send was not completed"),
+                "message": _send_result_message(lead, send_result),
             })
         except InsufficientCreditsError as exc:
             db.rollback()
@@ -579,7 +589,7 @@ async def send_reviewed_draft(
 
     from services.outbound_engine import send_lead_email
     try:
-        await send_lead_email(db_lead, workflow, db, raise_on_credit_error=True)
+        send_result = await send_lead_email(db_lead, workflow, db, raise_on_credit_error=True)
     except InsufficientCreditsError as exc:
         raise HTTPException(
             status_code=402,
@@ -595,7 +605,7 @@ async def send_reviewed_draft(
         "ok": db_lead.status == "sent",
         "lead_id": db_lead.id,
         "status": db_lead.status,
-        "message": "Sent" if db_lead.status == "sent" else (db_lead.reply_snippet or "Send was not completed"),
+        "message": _send_result_message(db_lead, send_result),
     }
 
 

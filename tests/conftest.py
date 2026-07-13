@@ -21,7 +21,12 @@ def _reset_engine_state():
     """
     try:
         from services import outbound_engine as oe
-        for d in (oe._leadcontact_cursor, oe._leadcontact_backoff_until, oe._leadcontact_kw_rotation):
+        for d in (
+            oe._leadcontact_cursor,
+            oe._leadcontact_backoff_until,
+            oe._leadcontact_kw_rotation,
+            oe._leadcontact_search_calls,
+        ):
             d.clear()
     except Exception:
         pass

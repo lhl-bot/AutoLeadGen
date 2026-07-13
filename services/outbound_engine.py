@@ -6,6 +6,7 @@ import threading
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
+from sqlalchemy import desc, func
 from database import SessionLocal, db_retry, db_retry_async
 from models import Workflow, Lead, EmailLog, ProcessedDomain
 from services.search_engine import is_domain_quality_candidate, search_domain_results
@@ -17,6 +18,7 @@ from services.auth import decrypt_smtp_pass
 from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.email_content import build_email_html, prepare_email_content
 from services.email_preflight import (
+    VERIFIED_EMAIL_STATUSES,
     is_email_good_for_lead,
     is_lead_sendable_now,
     temporary_send_block_reason,
@@ -25,6 +27,7 @@ from services.email_preflight import (
 from services.lead_scoring import apply_lead_score, build_outreach_context
 from services.send_results import record_send_failure, record_send_success
 from services.sender_accounts import select_sender_account
+from services.email_threads import extract_message_ids
 from services.suppression import generate_unsubscribe_token, suppression_reason
 
 # ─── Global Snovio Client ───
@@ -72,7 +75,45 @@ _leadcontact_cursor: Dict[int, Dict[str, Any]] = {}
 # Per-workflow keyword rotation index — advanced when a keyword's pool is
 # exhausted so the next search tries a different distinctive word.
 _leadcontact_kw_rotation: Dict[int, int] = {}
+# Per-process LeadContact search-call guard. The durable guard below also counts
+# today's inserted LeadContact rows, but this catches duplicate paid calls that
+# return zero new rows before they can pile up.
+_leadcontact_search_calls: Dict[tuple, int] = {}
 MAX_CONSECUTIVE_ERRORS = 5
+
+
+def _cold_followup_candidates(db, wf_id: int, max_followups: int, limit: int = 5) -> List[Lead]:
+    """Pick the best non-replied leads to consider for cold follow-up drafting."""
+    last_outbound = (
+        db.query(
+            EmailLog.lead_id.label("lead_id"),
+            func.max(EmailLog.sent_at).label("last_sent_at"),
+        )
+        .filter(EmailLog.direction == "outbound")
+        .group_by(EmailLog.lead_id)
+        .subquery()
+    )
+    return (
+        db.query(Lead)
+        .join(last_outbound, Lead.id == last_outbound.c.lead_id)
+        .filter(
+            Lead.workflow_id == wf_id,
+            Lead.status == "sent",
+            Lead.has_replied.is_(False),
+            Lead.followup_count < max_followups,
+            Lead.email.isnot(None),
+            Lead.email != "",
+            Lead.email_validation_status.in_(list(VERIFIED_EMAIL_STATUSES)),
+        )
+        .order_by(
+            desc(Lead.fit_score.isnot(None)),
+            desc(Lead.fit_score),
+            last_outbound.c.last_sent_at.asc(),
+            Lead.id.asc(),
+        )
+        .limit(limit)
+        .all()
+    )
 
 def _int_env(name: str, default: int, min_value: int = 1, max_value: int = 100000) -> int:
     try:
@@ -87,6 +128,136 @@ def _bool_env(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.lower() not in {"0", "false", "no", "off"}
+
+
+def _utc_day_start() -> datetime:
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _workflow_search_counts(wf_id: int, db) -> Dict[str, int]:
+    statuses_in_pipeline = ["found", "drafted"]
+    statuses_with_contact = ["found", "drafted", "sent", "send_failed"]
+    statuses_from_search = [
+        "found",
+        "drafted",
+        "sent",
+        "send_failed",
+        "needs_email",
+        "invalid_email",
+        "bounced",
+        "low_score",
+    ]
+    verified_statuses = list(VERIFIED_EMAIL_STATUSES)
+
+    pipeline_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.status.in_(statuses_in_pipeline),
+    ).count()
+    contactable_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.status.in_(statuses_with_contact),
+        Lead.email.isnot(None),
+        Lead.email != "",
+    ).count()
+    usable_email_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.email.isnot(None),
+        Lead.email != "",
+        Lead.email_validation_status.in_(verified_statuses),
+    ).count()
+    total_search_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.status.in_(statuses_from_search),
+    ).count()
+    needs_email_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.status == "needs_email",
+    ).count()
+    blocked_count = db.query(Lead).filter(
+        Lead.workflow_id == wf_id,
+        Lead.status.in_(["needs_email", "invalid_email", "bounced", "low_score"]),
+    ).count()
+
+    return {
+        "pipeline_count": int(pipeline_count or 0),
+        "contactable_count": int(contactable_count or 0),
+        "usable_email_count": int(usable_email_count or 0),
+        "total_search_count": int(total_search_count or 0),
+        "needs_email_count": int(needs_email_count or 0),
+        "blocked_count": int(blocked_count or 0),
+    }
+
+
+def _workflow_search_stop_reason(
+    wf_id: int,
+    db,
+    *,
+    pipeline_target: Optional[int] = None,
+    email_target: Optional[int] = None,
+    total_target: Optional[int] = None,
+) -> Optional[str]:
+    """Return a reason to stop paid/external discovery, or None to keep searching."""
+    pipeline_target = pipeline_target if pipeline_target is not None else _int_env("SEARCH_PIPELINE_TARGET", 50, 1, 1000)
+    email_target = email_target if email_target is not None else _int_env("SEARCH_WORKFLOW_EMAIL_TARGET", 200, 1, 100000)
+    total_target = total_target if total_target is not None else _int_env("SEARCH_WORKFLOW_TOTAL_TARGET", 250, 1, 100000)
+    counts = _workflow_search_counts(wf_id, db)
+
+    if counts["total_search_count"] >= total_target:
+        return f"total lead cap reached ({counts['total_search_count']}/{total_target})"
+    if counts["contactable_count"] >= email_target:
+        return f"contactable lead target reached ({counts['contactable_count']}/{email_target})"
+    if counts["pipeline_count"] >= pipeline_target:
+        return f"pipeline target reached ({counts['pipeline_count']}/{pipeline_target})"
+
+    min_sample = _int_env("SEARCH_STOP_BAD_RATIO_MIN_LEADS", 50, 1, 100000)
+    ratio_limit_raw = os.environ.get("SEARCH_STOP_BAD_RATIO", "0.80")
+    try:
+        ratio_limit = float(ratio_limit_raw)
+    except (TypeError, ValueError):
+        ratio_limit = 0.80
+    if ratio_limit > 0 and counts["total_search_count"] >= min_sample:
+        bad_ratio = counts["blocked_count"] / max(1, counts["total_search_count"])
+        if bad_ratio >= ratio_limit:
+            return (
+                "bad lead ratio too high "
+                f"({counts['blocked_count']}/{counts['total_search_count']}={bad_ratio:.0%}, limit {ratio_limit:.0%})"
+            )
+
+    return None
+
+
+def _leadcontact_search_calls_allowed(wf_id: int) -> bool:
+    cap = _int_env("LEADCONTACT_MAX_SEARCH_CALLS_PER_DAY", 20, 0, 1000000)
+    if cap <= 0:
+        return False
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return _leadcontact_search_calls.get((day, wf_id), 0) < cap
+
+
+def _record_leadcontact_search_call(wf_id: int) -> None:
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    key = (day, wf_id)
+    _leadcontact_search_calls[key] = _leadcontact_search_calls.get(key, 0) + 1
+
+
+def _leadcontact_search_contact_budget_remaining(wf_id: int) -> int:
+    cap = _int_env("LEADCONTACT_MAX_SEARCH_CONTACTS_PER_DAY", 50, 0, 1000000)
+    if cap <= 0:
+        return 0
+
+    db = SessionLocal()
+    try:
+        used = db.query(Lead).filter(
+            Lead.workflow_id == wf_id,
+            Lead.source_channel == "leadcontact",
+            Lead.created_at >= _utc_day_start(),
+        ).count()
+        return max(0, cap - int(used or 0))
+    except Exception as e:
+        logger.warning(f"[LeadContact] Could not read daily search-contact budget for workflow {wf_id}: {e}")
+        return 0
+    finally:
+        db.close()
 
 
 def _public_base_url() -> Optional[str]:
@@ -333,43 +504,26 @@ async def process_prospecting_workflows():
 
         db = SessionLocal()
         try:
-            pipeline_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted"])
-            ).count()
-            contactable_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted", "sent", "send_failed"]),
-                Lead.email.isnot(None),
-                Lead.email != "",
-            ).count()
-            total_search_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted", "sent", "send_failed", "needs_email"]),
-            ).count()
+            counts = _workflow_search_counts(wf_id, db)
+            stop_reason = _workflow_search_stop_reason(
+                wf_id,
+                db,
+                pipeline_target=pipeline_target,
+                email_target=email_target,
+                total_target=total_target,
+            )
         finally:
             db.close()
 
-        if contactable_count >= email_target:
-            logger.info(
-                f"Prospecting workflow #{wf_id} '{wf_name}' has enough contactable leads "
-                f"({contactable_count}/{email_target}); skipping search"
-            )
-            continue
-
-        if total_search_count >= total_target:
-            logger.info(
-                f"Prospecting workflow #{wf_id} '{wf_name}' reached total lead cap "
-                f"({total_search_count}/{total_target}); skipping search"
-            )
-            continue
-
-        if pipeline_count >= pipeline_target:
+        if stop_reason:
+            logger.info(f"Prospecting workflow #{wf_id} '{wf_name}' skipping search: {stop_reason}")
             continue
 
         logger.info(
             f"Prospecting workflow #{wf_id} '{wf_name}' needs leads "
-            f"(pipeline {pipeline_count}/{pipeline_target}, email {contactable_count}/{email_target}, total {total_search_count}/{total_target})"
+            f"(pipeline {counts['pipeline_count']}/{pipeline_target}, "
+            f"email {counts['contactable_count']}/{email_target}, "
+            f"usable {counts['usable_email_count']}, total {counts['total_search_count']}/{total_target})"
         )
         launch_workflow_search(wf_id)
 
@@ -708,8 +862,11 @@ async def process_workflow(wf_id: int):
                         try:
                             lead_obj = db_v.query(Lead).filter(Lead.id == lead_id).first()
                             if lead_obj:
+                                existing_v_status = lead_obj.email_validation_status
+                                if v_status == "unknown" and existing_v_status in VERIFIED_EMAIL_STATUSES:
+                                    v_status = existing_v_status
                                 lead_obj.email_validation_status = v_status
-                                lead_obj.email_verified = (v_status == "valid")
+                                lead_obj.email_verified = v_status in VERIFIED_EMAIL_STATUSES
                                 if v_status == "invalid":
                                     lead_obj.status = "invalid_email"
                                     db_v.commit()
@@ -1025,11 +1182,7 @@ async def process_workflow(wf_id: int):
             db = SessionLocal()
             try:
                 # Find leads that were emailed (status = 'sent'), have not replied, and have followup_count < wf_max_followups
-                cold_leads = db.query(Lead).filter(
-                    Lead.workflow_id == wf_id,
-                    Lead.status == "sent",
-                    Lead.followup_count < wf_max_followups
-                ).limit(5).all()
+                cold_leads = _cold_followup_candidates(db, wf_id, wf_max_followups, limit=5)
                 cold_infos = [
                     (l.id, l.email, l.first_name, l.company_name, l.followup_count)
                     for l in cold_leads
@@ -1152,38 +1305,24 @@ async def process_workflow(wf_id: int):
 
         db = SessionLocal()
         try:
-            pipeline_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted"])
-            ).count()
-            contactable_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted", "sent", "send_failed"]),
-                Lead.email.isnot(None),
-                Lead.email != "",
-            ).count()
-            total_search_count = db.query(Lead).filter(
-                Lead.workflow_id == wf_id,
-                Lead.status.in_(["found", "drafted", "sent", "send_failed", "needs_email"]),
-            ).count()
+            stop_reason = _workflow_search_stop_reason(wf_id, db)
         finally:
             db.close()
 
-        if (
-            pipeline_count < _int_env("SEARCH_PIPELINE_TARGET", 50, 1, 1000)
-            and contactable_count < _int_env("SEARCH_WORKFLOW_EMAIL_TARGET", 200, 1, 100000)
-            and total_search_count < _int_env("SEARCH_WORKFLOW_TOTAL_TARGET", 250, 1, 100000)
-        ):
-            cooldown_remaining = _workflow_search_cooldown_remaining(wf_id)
-            if cooldown_remaining > 0:
-                logger.info(f"Search cooldown active for workflow #{wf_id} '{wf_name}' ({cooldown_remaining}s remaining)")
-                return
-            _workflow_last_search_at[wf_id] = time.time()
-            result = await asyncio.to_thread(search_and_extract_leads, wf_id)
-            if isinstance(result, dict) and result.get("status") in ("ok", "busy", "no_domains", "all_duplicates", "rotated_keyword"):
-                _error_counts[wf_id] = 0
-            else:
-                logger.warning(f"Workflow #{wf_id} search returned status={result.get('status') if isinstance(result, dict) else 'unknown'}, not resetting error count")
+        if stop_reason:
+            logger.info(f"Workflow #{wf_id} '{wf_name}' skipping search stage: {stop_reason}")
+            return
+
+        cooldown_remaining = _workflow_search_cooldown_remaining(wf_id)
+        if cooldown_remaining > 0:
+            logger.info(f"Search cooldown active for workflow #{wf_id} '{wf_name}' ({cooldown_remaining}s remaining)")
+            return
+        _workflow_last_search_at[wf_id] = time.time()
+        result = await asyncio.to_thread(search_and_extract_leads, wf_id)
+        if isinstance(result, dict) and result.get("status") in ("ok", "busy", "no_domains", "all_duplicates", "rotated_keyword", "search_capacity_reached"):
+            _error_counts[wf_id] = 0
+        else:
+            logger.warning(f"Workflow #{wf_id} search returned status={result.get('status') if isinstance(result, dict) else 'unknown'}, not resetting error count")
 
     except Exception as e:
         _error_counts[wf_id] = _error_counts.get(wf_id, 0) + 1
@@ -1214,6 +1353,20 @@ def _search_and_extract_leads(
   batch_lead_limit = batch_lead_limit or _int_env("SEARCH_BATCH_LEAD_LIMIT", 25, 1, 200)
   max_domains = max_domains or _int_env("SEARCH_MAX_DOMAINS_PER_BATCH", 80, 10, 250)
 
+  db_guard = SessionLocal()
+  try:
+      stop_reason = _workflow_search_stop_reason(wf_id, db_guard)
+      if stop_reason:
+          logger.info(f"Workflow #{wf_id} search not launched: {stop_reason}")
+          return {
+              "workflow_id": wf_id,
+              "status": "search_capacity_reached",
+              "new_leads": 0,
+              "reason": stop_reason,
+          }
+  finally:
+      db_guard.close()
+
   # Apollo takes priority if configured
   apollo_api_key = os.environ.get("APOLLO_API_KEY")
   if apollo_api_key:
@@ -1224,7 +1377,8 @@ def _search_and_extract_leads(
   if _lc_key:
       from services.leadcontact_client import LeadContactClient
       lc = LeadContactClient(_lc_key)
-      if lc.get_credits() >= 50:
+      lc_credits = lc.get_credits()
+      if lc_credits >= 50:
           try:
               lc_stats = _leadcontact_search_and_extract(wf_id, lc, batch_lead_limit=batch_lead_limit)
               if lc_stats.get("new_leads", 0) > 0:
@@ -1232,7 +1386,7 @@ def _search_and_extract_leads(
           except Exception as e:
               logger.warning(f"LeadContact search failed (will fall back to web search): {e}")
       else:
-          logger.info(f"LeadContact credits too low ({lc.get_credits()}), skipping search stage")
+          logger.info(f"LeadContact credits too low ({lc_credits}), skipping LeadContact search")
 
   stats: Dict[str, Any] = {
       "workflow_id": wf_id,
@@ -1254,6 +1408,17 @@ def _search_and_extract_leads(
             return stats
             
         snovio = get_snovio_client()
+        if (
+            not _bool_env("SEARCH_SAVE_COMPANIES_WITHOUT_EMAIL", True)
+            and not snovio._authenticate()
+        ):
+            stats["status"] = "snovio_unavailable"
+            stats["error"] = "Snov.io auth unavailable; web search cannot produce email-qualified leads"
+            logger.warning(
+                f"Snov.io unavailable for workflow #{wf_id}; skipping web/domain search "
+                "because company-only leads are disabled."
+            )
+            return stats
         
         # Build excluded domains set from client pool
         excluded_domains = set()
@@ -1724,6 +1889,23 @@ def _lead_worth_email_lookup(company_name: Optional[str], job_title: Optional[st
     hay = f"{company_name or ''} {job_title or ''}".lower().strip()
     if not hay:
         return True
+    title = (job_title or "").lower()
+    buyer_title_terms = {
+        "buyer",
+        "buying",
+        "purchasing",
+        "procurement",
+        "sourcing",
+        "category",
+        "merchandise",
+        "merchandising",
+        "einkauf",
+        "einkäuf",
+        "einkaeuf",
+        "beschaffung",
+    }
+    if any(term in title for term in buyer_title_terms):
+        return True
     return any(tok in hay for tok in target_tokens)
 
 
@@ -1747,6 +1929,17 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         remaining = int(backoff_until - time.time())
         logger.info(f"[LeadContact] workflow #{wf_id} backed off ({remaining}s left); skipping search")
         stats["status"] = "backoff"
+        return stats
+
+    if not _leadcontact_search_calls_allowed(wf_id):
+        logger.warning(f"[LeadContact] Daily search-call budget reached for workflow {wf_id}; skipping")
+        stats["status"] = "budget_reached"
+        return stats
+
+    contact_budget_remaining = _leadcontact_search_contact_budget_remaining(wf_id)
+    if contact_budget_remaining <= 0:
+        logger.warning(f"[LeadContact] Daily search-contact budget reached for workflow {wf_id}; skipping")
+        stats["status"] = "budget_reached"
         return stats
 
     try:
@@ -1776,13 +1969,22 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         kw_rotation = _leadcontact_kw_rotation.get(wf_id, 0)
         plan = _build_leadcontact_query_plan(keywords, target_role, target_region, product_focus, company_size or None, kw_rotation=kw_rotation)
         cursor = _leadcontact_cursor.get(wf_id)
-        per_page = min(max_lc_leads, batch_lead_limit)
+        per_page = min(max_lc_leads, batch_lead_limit, contact_budget_remaining)
         employees = []
         chosen = None
-        next_token = ""
+        cursor_candidate = None
+        seen_employee_keys = set()
         for attempt in plan:
+            if not _leadcontact_search_calls_allowed(wf_id):
+                logger.warning(
+                    f"[LeadContact] Daily search-call budget reached for workflow {wf_id}; "
+                    "stopping query relaxation"
+                )
+                stats["status"] = "budget_reached"
+                break
             token = cursor.get("token") if (cursor and cursor.get("query") == attempt) else None
             logger.info(f"[LeadContact] Searching — {attempt}{' (next page)' if token else ''}")
+            _record_leadcontact_search_call(wf_id)
             result = lc.search_employees(
                 job_titles=attempt["job_titles"],
                 locations=attempt["locations"],
@@ -1795,13 +1997,26 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             )
             emps = result.get("employees", []) if isinstance(result, dict) else []
             if emps:
-                employees = emps
-                chosen = attempt
-                next_token = (result.get("nextPageToken") or "") if isinstance(result, dict) else ""
+                chosen = chosen or attempt
+                next_page = (result.get("nextPageToken") or "") if isinstance(result, dict) else ""
+                if next_page and cursor_candidate is None:
+                    cursor_candidate = {"query": attempt, "token": next_page}
+                for emp in emps:
+                    identity = (
+                        emp.get("linkedinUrl")
+                        or emp.get("email")
+                        or f"{emp.get('fullName') or ''}|{emp.get('companyName') or ''}"
+                    )
+                    if identity and identity not in seen_employee_keys:
+                        seen_employee_keys.add(identity)
+                        employees.append(emp)
                 break
             if isinstance(result, dict) and result.get("error"):
                 logger.warning(f"[LeadContact] search error, stopping ladder: {result.get('error')}")
                 break
+
+        if stats["status"] == "budget_reached":
+            return stats
 
         if not employees:
             logger.info(f"[LeadContact] No employees found after {len(plan)} query tiers")
@@ -1880,12 +2095,12 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                 db_insert.close()
 
         stats["new_leads"] = new_leads
-        stats["next_page"] = bool(next_token)
+        stats["next_page"] = bool(cursor_candidate)
         logger.info(f"[LeadContact] Added {new_leads} leads from LeadContact search")
 
         # Advance the pagination cursor so the next run fetches the next page.
-        if chosen is not None and next_token:
-            _leadcontact_cursor[wf_id] = {"query": chosen, "token": next_token}
+        if cursor_candidate:
+            _leadcontact_cursor[wf_id] = cursor_candidate
         else:
             # No more pages for this query — clear cursor so a future run can restart.
             _leadcontact_cursor.pop(wf_id, None)
@@ -1902,8 +2117,9 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             else:
                 cooldown = _int_env("LEADCONTACT_ROTATE_BACKOFF_SECONDS", 60, 0, 3600)
             _leadcontact_backoff_until[wf_id] = time.time() + cooldown
+            chosen_keyword = (chosen or {}).get("keyword") or ""
             logger.warning(
-                f"[LeadContact] workflow #{wf_id}: keyword '{single_kw}' exhausted "
+                f"[LeadContact] workflow #{wf_id}: keyword '{chosen_keyword}' exhausted "
                 f"({len(employees)} contacts, 0 new); rotating keyword, backing off {cooldown}s"
             )
     except Exception as e:
@@ -2068,18 +2284,18 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
         bounce_pause_reason = _workflow_bounce_pause_reason(wf.id, db)
         if bounce_pause_reason:
             logger.warning(f"Email sending paused for workflow '{wf.name}': {bounce_pause_reason}")
-            return
+            return {"success": False, "message": f"Sending paused: {bounce_pause_reason}"}
 
         preflight_reason = validate_lead_before_send(lead, db)
         if preflight_reason:
             _mark_lead_suppressed(lead, preflight_reason, db)
             logger.warning(f"Suppressed email to {lead.email or lead.domain}: {preflight_reason}")
-            return
+            return {"success": False, "message": f"Suppressed before sending: {preflight_reason}"}
 
         temporary_reason = temporary_send_block_reason(lead, db)
         if temporary_reason:
             logger.info(f"Skipping {lead.email}: {temporary_reason}")
-            return
+            return {"success": False, "message": f"Skipped: {temporary_reason}"}
 
         # Idempotency guard against duplicate sends (overlapping ticks / retries /
         # multiple instances). Keep the window well under the follow-up interval.
@@ -2089,20 +2305,39 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
                 f"Skipping duplicate send to {lead.email}: an outbound email to lead "
                 f"#{lead.id} was already logged within {dedupe_window}s"
             )
-            return
+            return {
+                "success": False,
+                "message": f"Skipped duplicate send: outbound email already logged within {dedupe_window}s",
+            }
+
+        last_outbound = db.query(EmailLog).filter(
+            EmailLog.lead_id == lead.id,
+            EmailLog.direction == "outbound",
+        ).order_by(EmailLog.sent_at.desc(), EmailLog.id.desc()).first()
+        preferred_email = None
+        if last_outbound and (lead.followup_count > 0 or lead.has_replied):
+            preferred_email = last_outbound.from_email
 
         per_account_daily_cap = _int_env("EMAIL_MAX_DAILY_PER_ACCOUNT", 15, 1, 500)
         sender_selection = select_sender_account(
             db,
             wf,
             per_account_daily_cap=per_account_daily_cap,
+            preferred_email=preferred_email,
         )
         for email, sent_count in sender_selection.capped_accounts:
             logger.info(f"Daily cap reached for {email}: {sent_count}/{sender_selection.daily_cap}, trying next account")
         account_to_use = sender_selection.account
         if not account_to_use:
+            if preferred_email and not sender_selection.capped_accounts:
+                message = "Original sender account is no longer bound to this workflow"
+                logger.warning(f"{message}: {preferred_email}")
+                return {"success": False, "message": message}
             logger.info(f"All active sender email accounts for workflow '{wf.name}' have reached their daily caps.")
-            return
+            return {
+                "success": False,
+                "message": "All active sender email accounts have reached their daily caps",
+            }
                     
         sender_name = account_to_use.display_name or "there"
         prepared_email = prepare_email_content(
@@ -2119,14 +2354,20 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
         unsubscribe_url = _unsubscribe_url_for_lead(lead)
         body_html = build_email_html(body, account_to_use.display_name or account_to_use.email, custom_sig, unsubscribe_url)
 
-        in_reply_to = None
-        if lead.followup_count > 0:
-            last_outbound = db.query(EmailLog).filter(
+        last_inbound = None
+        if lead.has_replied:
+            last_inbound = db.query(EmailLog).filter(
                 EmailLog.lead_id == lead.id,
-                EmailLog.direction == "outbound"
-            ).order_by(EmailLog.sent_at.desc()).first()
-            if last_outbound:
-                in_reply_to = last_outbound.message_id
+                EmailLog.direction == "inbound",
+                func.lower(EmailLog.from_email) == (lead.email or "").strip().lower(),
+            ).order_by(EmailLog.sent_at.desc(), EmailLog.id.desc()).first()
+        inbound_message_id = last_inbound.message_id if last_inbound else None
+        outbound_message_id = last_outbound.message_id if last_outbound else None
+        in_reply_to = inbound_message_id or (
+            outbound_message_id if lead.followup_count > 0 else None
+        )
+        reference_ids = extract_message_ids(outbound_message_id, inbound_message_id)
+        references = " ".join(reference_ids) if reference_ids else None
 
         if charge_credits:
             consume_credits(
@@ -2156,7 +2397,7 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             sender_name=account_to_use.display_name or account_to_use.email.split('@')[0],
             reply_to=account_to_use.email,
             in_reply_to=in_reply_to,
-            references=in_reply_to,
+            references=references,
             list_unsubscribe_url=unsubscribe_url
         )
         
@@ -2171,6 +2412,7 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
                 message_id=res.get("message_id")
             )
             logger.info(f"✉ Sent to {lead.email} via {account_to_use.email}")
+            return {"success": True, "message": "Sent"}
         else:
             if credit_charged:
                 refund_credits(
@@ -2182,7 +2424,8 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
                     reference_id=lead.id,
                 )
                 credit_charged = False
-            failure_update = record_send_failure(db, lead)
+            failure_message = res.get("message") or "SMTP send failed"
+            failure_update = record_send_failure(db, lead, message=failure_message)
             if failure_update.permanently_failed:
                 logger.error(f"✘ Permanently failed to send to {lead.email} after {failure_update.fail_count} attempts: {res.get('message')}")
                 try:
@@ -2201,6 +2444,12 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
                     pass
             else:
                 logger.warning(f"Send failed to {lead.email} (attempt {failure_update.fail_count}/3): {res.get('message')}")
+            return {
+                "success": False,
+                "message": lead.reply_snippet or failure_message,
+                "attempt": failure_update.fail_count,
+                "permanently_failed": failure_update.permanently_failed,
+            }
     except InsufficientCreditsError as e:
         logger.warning(
             f"Insufficient credits for workflow '{wf.name}' user #{wf.user_id}: "
@@ -2213,6 +2462,10 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             db.rollback()
         if raise_on_credit_error:
             raise
+        return {
+            "success": False,
+            "message": f"Insufficient credits for outbound send: required {e.required}, balance {e.balance}",
+        }
     except Exception as e:
         if credit_charged and not sent_successfully:
             try:
@@ -2227,6 +2480,7 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             except Exception as refund_err:
                 logger.error(f"Credit refund failed for lead {lead.id}: {refund_err}")
         logger.error(f"Send stage error for {lead.email}: {e}")
+        return {"success": False, "message": f"Send stage error: {e}"}
 
 async def _send_linkedin_invites(wf_id: int, wf_name: str, linkedin_template: str, daily_limit: int, ai_prompt: str):
     """Stage 2.5: Auto-send LinkedIn connection invitations for leads that have linkedin_url."""

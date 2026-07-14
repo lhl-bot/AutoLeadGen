@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from '@/lib/i18n';
 import { Button } from '@/components/ui/button';
-import { Database, Plus, RefreshCw, Trash2, Download, Search, Mail as MailIcon, ThumbsUp, ThumbsDown, ShieldCheck, ShieldAlert, ShieldX, Copy, Check, User, Building, Target, Zap, Sparkles, FileText } from 'lucide-react';
+import { Database, Plus, RefreshCw, Trash2, Download, Search, Mail as MailIcon, ThumbsUp, ThumbsDown, ShieldCheck, ShieldAlert, ShieldX, Copy, Check, User, Building, Target, Zap, Sparkles, FileText, Upload, FileSpreadsheet, AlertCircle } from 'lucide-react';
 import { apiFetch, formatApiDetail } from '@/lib/utils';
+import { toast } from 'sonner';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import {
   Dialog,
@@ -17,7 +18,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import type { ClientPool, Lead, LeadBrief } from '@/lib/types';
+import type {
+  ClientPool,
+  CsvImportPreview,
+  CsvImportResult,
+  CsvLeadField,
+  Lead,
+  LeadBrief,
+} from '@/lib/types';
+
+const LEADS_PAGE_SIZE = 50;
+const CSV_FIELD_LABELS: Record<CsvLeadField, [string, string]> = {
+  company_name: ['Company', '公司名称'],
+  domain: ['Domain / Website', '域名 / 网站'],
+  email: ['Email', '邮箱'],
+  first_name: ['First name', '名'],
+  last_name: ['Last name', '姓'],
+  job_title: ['Job title', '职位'],
+  linkedin_url: ['LinkedIn URL', '领英链接'],
+  whatsapp_number: ['WhatsApp / Phone', 'WhatsApp / 电话'],
+};
 
 export default function PoolsPage() {
   const { language } = useTranslation();
@@ -40,8 +60,15 @@ export default function PoolsPage() {
   const [searchMessage, setSearchMessage] = useState('');
   const [leadFilter, setLeadFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [leadPage, setLeadPage] = useState(0);
+  const [hasMoreLeads, setHasMoreLeads] = useState(false);
   const [ratingInFlight, setRatingInFlight] = useState<number | null>(null);
   const [scoringInFlight, setScoringInFlight] = useState<number | null>(null);
+
+  // Bulk-selection state for batch operations on the lead table.
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<number>>(new Set());
+  const [isBulkRunning, setIsBulkRunning] = useState(false);
+  const [moveTargetId, setMoveTargetId] = useState<string>('');
 
   // Lead Brief Modal State
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -55,6 +82,14 @@ export default function PoolsPage() {
   // Delete confirmation state
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+
+  // CSV import state
+  const [importPool, setImportPool] = useState<ClientPool | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPreview, setImportPreview] = useState<CsvImportPreview | null>(null);
+  const [importMapping, setImportMapping] = useState<Record<CsvLeadField, string | null> | null>(null);
+  const [isPreviewingImport, setIsPreviewingImport] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   const fetchPools = async () => {
     setIsLoading(true);
@@ -121,19 +156,215 @@ export default function PoolsPage() {
     }
   };
 
-  const openPoolDetail = async (pool: ClientPool) => {
+  const closeImportDialog = () => {
+    setImportPool(null);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportMapping(null);
+    setIsPreviewingImport(false);
+    setIsImporting(false);
+  };
+
+  const openImportDialog = (event: React.MouseEvent, pool: ClientPool) => {
+    event.stopPropagation();
+    setImportPool(pool);
+    setImportFile(null);
+    setImportPreview(null);
+    setImportMapping(null);
+  };
+
+  const openPoolDetail = (pool: ClientPool) => {
     setSelectedPool(pool);
+    setLeadPage(0);
+    setLeadFilter('');
+    setStatusFilter('all');
+  };
+
+  const fetchPoolLeads = useCallback(async (
+    poolId: number,
+    page: number,
+    status: string,
+    search: string,
+    signal?: AbortSignal,
+  ) => {
     setIsLeadsLoading(true);
+    const params = new URLSearchParams({
+      skip: String(page * LEADS_PAGE_SIZE),
+      limit: String(LEADS_PAGE_SIZE + 1),
+    });
+    if (status !== 'all') params.set('status', status);
+    if (search.trim()) params.set('search', search.trim());
+
     try {
-      const res = await apiFetch(`/api/client_pools/${pool.id}/leads?limit=1000`);
+      const res = await apiFetch(`/api/client_pools/${poolId}/leads?${params.toString()}`, { signal });
       if (res.ok) {
-        const data = await res.json();
-        setLeads(data);
+        const data: Lead[] = await res.json();
+        setLeads(data.slice(0, LEADS_PAGE_SIZE));
+        setHasMoreLeads(data.length > LEADS_PAGE_SIZE);
       }
     } catch (e) {
-      console.error(e);
+      if (!(e instanceof DOMException && e.name === 'AbortError')) {
+        console.error(e);
+      }
     } finally {
-      setIsLeadsLoading(false);
+      if (!signal?.aborted) setIsLeadsLoading(false);
+    }
+  }, []);
+
+  const previewCsvImport = async (
+    pool: ClientPool,
+    file: File,
+    mapping?: Record<CsvLeadField, string | null>,
+  ) => {
+    setIsPreviewingImport(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      if (mapping) form.append('mapping', JSON.stringify(mapping));
+      const res = await apiFetch(`/api/client_pools/${pool.id}/import-preview`, {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(formatApiDetail(data.detail, txt('CSV preview failed.', 'CSV 预检失败。')));
+        return;
+      }
+      const preview = data as CsvImportPreview;
+      setImportPreview(preview);
+      setImportMapping(preview.mapping);
+    } catch (error) {
+      console.error(error);
+      toast.error(txt('Network error while reading CSV.', '读取 CSV 时发生网络错误。'));
+    } finally {
+      setIsPreviewingImport(false);
+    }
+  };
+
+  const handleImportFile = async (file: File | null) => {
+    setImportFile(file);
+    setImportPreview(null);
+    setImportMapping(null);
+    if (file && importPool) {
+      await previewCsvImport(importPool, file);
+    }
+  };
+
+  const importCsvLeads = async () => {
+    if (!importPool || !importFile || !importMapping) return;
+    setIsImporting(true);
+    try {
+      const form = new FormData();
+      form.append('file', importFile);
+      form.append('mapping', JSON.stringify(importMapping));
+      const res = await apiFetch(`/api/client_pools/${importPool.id}/import`, {
+        method: 'POST',
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(formatApiDetail(data.detail, txt('CSV import failed.', 'CSV 导入失败。')));
+        return;
+      }
+      const result = data as CsvImportResult;
+      toast.success(txt(
+        `Imported ${result.imported} leads; skipped ${result.duplicates} duplicates and ${result.invalid} invalid rows.`,
+        `已导入 ${result.imported} 条线索；跳过 ${result.duplicates} 条重复和 ${result.invalid} 条无效数据。`,
+      ));
+      await fetchPools();
+      if (selectedPool?.id === importPool.id) {
+        await fetchPoolLeads(importPool.id, 0, statusFilter, leadFilter);
+        setLeadPage(0);
+      }
+      closeImportDialog();
+    } catch (error) {
+      console.error(error);
+      toast.error(txt('Network error during CSV import.', 'CSV 导入时发生网络错误。'));
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedPool) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetchPoolLeads(
+        selectedPool.id,
+        leadPage,
+        statusFilter,
+        leadFilter,
+        controller.signal,
+      );
+    }, leadFilter ? 300 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [fetchPoolLeads, leadFilter, leadPage, selectedPool, statusFilter]);
+
+  // Reset the selection whenever the visible set of leads changes.
+  useEffect(() => {
+    setSelectedLeadIds(new Set());
+  }, [selectedPool, leadPage, statusFilter, leadFilter]);
+
+  const toggleLeadSelected = (id: number) => {
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedLeadIds(prev =>
+      prev.size === leads.length ? new Set() : new Set(leads.map(l => l.id))
+    );
+  };
+
+  const runBulkAction = async (action: 'score' | 'delete' | 'blacklist' | 'move_pool') => {
+    const ids = Array.from(selectedLeadIds);
+    if (ids.length === 0) return;
+    if (action === 'move_pool' && !moveTargetId) {
+      toast.error(txt('Choose a destination pool first.', '请先选择目标客户池。'));
+      return;
+    }
+    setIsBulkRunning(true);
+    try {
+      const body: Record<string, unknown> = { lead_ids: ids, action };
+      if (action === 'move_pool') body.target_pool_id = Number(moveTargetId);
+      const res = await apiFetch('/api/leads/bulk/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(formatApiDetail(data.detail, txt('Bulk action failed.', '批量操作失败。')));
+        return;
+      }
+      const succeeded = data.succeeded ?? 0;
+      const failed = data.failed ?? 0;
+      const verb = action === 'score' ? txt('scored', '已评分')
+        : action === 'delete' ? txt('deleted', '已删除')
+        : action === 'blacklist' ? txt('blacklisted', '已加入黑名单')
+        : txt('moved', '已移动');
+      toast.success(
+        failed > 0
+          ? txt(`${succeeded} ${verb}, ${failed} skipped.`, `${succeeded} 条${verb}，${failed} 条跳过。`)
+          : txt(`${succeeded} leads ${verb}.`, `${succeeded} 条线索${verb}。`)
+      );
+      setSelectedLeadIds(new Set());
+      setMoveTargetId('');
+      if (selectedPool) {
+        await fetchPoolLeads(selectedPool.id, leadPage, statusFilter, leadFilter);
+      }
+      await fetchPools();
+    } catch (error) {
+      console.error(error);
+      toast.error(txt('Network error during bulk action.', '批量操作时发生网络错误。'));
+    } finally {
+      setIsBulkRunning(false);
     }
   };
 
@@ -173,7 +404,7 @@ export default function PoolsPage() {
       window.setTimeout(() => {
         fetchPools();
         if (selectedPool?.id === pool.id) {
-          openPoolDetail(pool);
+          fetchPoolLeads(pool.id, leadPage, statusFilter, leadFilter);
         }
       }, 4000);
     } catch (e) {
@@ -183,22 +414,6 @@ export default function PoolsPage() {
       setSearchingPoolId(null);
     }
   };
-
-  const filteredLeads = useMemo(() => {
-    const q = leadFilter.trim().toLowerCase();
-    return leads.filter(lead => {
-      if (statusFilter !== 'all' && lead.status !== statusFilter) return false;
-      if (!q) return true;
-      const name = [lead.first_name, lead.last_name].filter(Boolean).join(' ').toLowerCase();
-      return (
-        name.includes(q) ||
-        (lead.company_name || '').toLowerCase().includes(q) ||
-        (lead.domain || '').toLowerCase().includes(q) ||
-        (lead.email || '').toLowerCase().includes(q) ||
-        (lead.job_title || '').toLowerCase().includes(q)
-      );
-    });
-  }, [leads, leadFilter, statusFilter]);
 
   const rateLead = async (leadId: number, rating: 'positive' | 'negative') => {
     setRatingInFlight(leadId);
@@ -245,12 +460,29 @@ export default function PoolsPage() {
     setSendDraftMessage('');
     setIsBriefLoading(true);
     try {
-      const res = await apiFetch(`/api/leads/${lead.id}/brief`);
+      let currentLead = lead;
+      const leadRes = await apiFetch(`/api/leads/${lead.id}`);
+      if (leadRes.ok) {
+        currentLead = await leadRes.json();
+        setSelectedLead(currentLead);
+      }
+
+      if (!currentLead.domain) {
+        setBriefError(txt('No domain/website is available for AI research on this lead.', '该客户没有域名/网站，暂时无法生成 AI 背景调研。'));
+        return;
+      }
+
+      let res = await apiFetch(`/api/leads/${currentLead.id}/brief`);
+      // No brief yet — run AI deep-research on demand to generate one.
+      if (res.status === 404) {
+        res = await apiFetch(`/api/leads/${currentLead.id}/brief`, { method: 'POST' });
+      }
       if (res.ok) {
         const data = await res.json();
         setLeadBrief(data);
       } else {
-        setBriefError('未找到该客户的 AI 简介或尚未生成。');
+        const err = await res.json().catch(() => ({}));
+        setBriefError(formatApiDetail(err.detail, '生成 AI 简介失败，请稍后重试。'));
       }
     } catch (e) {
       console.error(e);
@@ -299,10 +531,10 @@ export default function PoolsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Workspace', '工作区')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{txt('Client Pools', '客户池')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{txt('Manage your target audiences and deduplicate leads automatically.', '管理您的目标客户群体并自动去重联系人。')}</p>
+          <p className="mt-2 text-sm text-slate-500">{txt('Manage your target audiences and deduplicate leads automatically.', '管理您的目标客户群体并自动去重联系人。')}</p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Button onClick={fetchPools} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <Button onClick={fetchPools} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
             <RefreshCw className="w-4 h-4" /> {txt('Refresh', '刷新')}
           </Button>
 
@@ -347,9 +579,9 @@ export default function PoolsPage() {
       )}
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{txt('Loading pools...', '正在加载客户池...')}</div>
+        <div className="py-20 text-center text-slate-500">{txt('Loading pools...', '正在加载客户池...')}</div>
       ) : pools.length === 0 ? (
-        <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
+        <div className="glass-panel p-12 text-center text-slate-500 rounded-lg border border-dashed border-slate-300">
           <Database className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>{txt('No client pools created yet. Click "New Pool" to get started.', '暂无已创建的客户池。点击“新建客户池”开始吧。')}</p>
         </div>
@@ -365,29 +597,32 @@ export default function PoolsPage() {
                 <div className="flex justify-between items-start mb-2">
                   <h3 className="font-bold text-lg text-white">{pool.name}</h3>
                   <div className="flex items-center gap-2">
-                    <button onClick={(e) => startPoolSearch(e, pool)} disabled={searchingPoolId === pool.id} className="text-gray-500 hover:text-emerald-500 disabled:opacity-50 transition-colors z-10" title={txt('Search leads now', '立即搜索联系人')}>
+                    <button onClick={(e) => openImportDialog(e, pool)} className="text-slate-500 hover:text-indigo-500 transition-colors z-10" title={txt('Import CSV', '导入 CSV')}>
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <button onClick={(e) => startPoolSearch(e, pool)} disabled={searchingPoolId === pool.id} className="text-slate-500 hover:text-emerald-500 disabled:opacity-50 transition-colors z-10" title={txt('Search leads now', '立即搜索联系人')}>
                       <Search className="w-4 h-4" />
                     </button>
-                    <button onClick={(e) => openDeleteDialog(e, pool.id)} className="text-gray-500 hover:text-rose-500 transition-colors z-10" title={txt('Delete pool', '删除客户库')}>
+                    <button onClick={(e) => openDeleteDialog(e, pool.id)} className="text-slate-500 hover:text-rose-500 transition-colors z-10" title={txt('Delete pool', '删除客户库')}>
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
-                <p className="text-sm text-gray-400 mb-4">{pool.description || txt('No description provided.', '暂无描述。')}</p>
+                <p className="text-sm text-slate-500 mb-4">{pool.description || txt('No description provided.', '暂无描述。')}</p>
                 {pool.excluded_domains && (
                   <div className="text-xs text-rose-400/80 bg-rose-400/10 inline-block px-2 py-1 rounded mb-4">
                     {txt('Excluded: ', '已排除: ')}{pool.excluded_domains}
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-white/10">
+              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-200">
                 <div>
                   <div className="text-2xl font-bold text-slate-900">{pool.total_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Total Leads', '总线索')}</div>
+                  <div className="text-xs text-slate-500 uppercase tracking-wider">{txt('Total Leads', '总线索')}</div>
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-indigo-500">{pool.contacted_leads || 0}</div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wider">{txt('Contacted', '已联系')}</div>
+                  <div className="text-xs text-slate-500 uppercase tracking-wider">{txt('Contacted', '已联系')}</div>
                 </div>
               </div>
             </div>
@@ -401,6 +636,9 @@ export default function PoolsPage() {
           setSelectedPool(null);
           setLeadFilter('');
           setStatusFilter('all');
+          setLeadPage(0);
+          setLeads([]);
+          setHasMoreLeads(false);
         }
       }}>
         <DialogContent className="w-[96vw] max-w-[1400px] sm:max-w-[1400px] h-[90vh] max-h-[90vh] flex flex-col bg-white border border-slate-200 text-slate-900 shadow-xl p-0 sm:p-0">
@@ -414,6 +652,11 @@ export default function PoolsPage() {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {selectedPool && (
+                  <Button onClick={(e) => openImportDialog(e, selectedPool)} variant="outline" size="sm" className="gap-2 bg-transparent border-slate-200">
+                    <Upload className="w-4 h-4" /> {txt('Import CSV', '导入 CSV')}
+                  </Button>
+                )}
                 <Button onClick={exportPoolLeads} variant="outline" size="sm" className="gap-2 bg-transparent border-slate-200">
                   <Download className="w-4 h-4" /> {txt('Export CSV', '导出 CSV')}
                 </Button>
@@ -432,9 +675,9 @@ export default function PoolsPage() {
               <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                 <div className="text-[10px] uppercase tracking-wider text-slate-500">{txt('Showing', '显示')}</div>
                 <div className="text-lg font-semibold text-slate-900">
-                  <span>{filteredLeads.length}</span>
-                  <span className="text-xs font-normal text-slate-400"> / </span>
                   <span>{leads.length}</span>
+                  <span className="text-xs font-normal text-slate-400"> / </span>
+                  <span>{txt(`page ${leadPage + 1}`, `第 ${leadPage + 1} 页`)}</span>
                 </div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
@@ -462,7 +705,10 @@ export default function PoolsPage() {
                   <button
                     key={s}
                     type="button"
-                    onClick={() => setStatusFilter(s)}
+                    onClick={() => {
+                      setStatusFilter(s);
+                      setLeadPage(0);
+                    }}
                     className={
                       'px-2.5 py-1 rounded-md text-xs font-medium transition-colors ' +
                       (statusFilter === s
@@ -486,24 +732,85 @@ export default function PoolsPage() {
               <Input
                 placeholder={txt('Search name / company / domain / email', '搜索姓名/公司/域名/邮箱')}
                 value={leadFilter}
-                onChange={e => setLeadFilter(e.target.value)}
+                onChange={e => {
+                  setLeadFilter(e.target.value);
+                  setLeadPage(0);
+                }}
                 className="w-full sm:w-64 h-9"
               />
             </div>
           </div>
 
+          {/* Bulk action bar — appears once leads are selected */}
+          {selectedLeadIds.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/70 px-4 py-2.5">
+              <span className="text-sm font-medium text-indigo-700">
+                {txt(`${selectedLeadIds.size} selected`, `已选 ${selectedLeadIds.size} 条`)}
+              </span>
+              <button
+                onClick={() => setSelectedLeadIds(new Set())}
+                className="text-xs text-slate-500 hover:text-slate-700 underline"
+              >
+                {txt('Clear', '清除')}
+              </button>
+              <div className="mx-1 h-4 w-px bg-indigo-200" />
+              <Button size="sm" variant="outline" disabled={isBulkRunning}
+                onClick={() => runBulkAction('score')}>
+                <Zap className="mr-1 h-3.5 w-3.5" /> {txt('Score', '评分')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={isBulkRunning}
+                onClick={() => runBulkAction('blacklist')}>
+                <ShieldX className="mr-1 h-3.5 w-3.5" /> {txt('Blacklist', '加黑名单')}
+              </Button>
+              <div className="flex items-center gap-1">
+                <select
+                  value={moveTargetId}
+                  onChange={e => setMoveTargetId(e.target.value)}
+                  className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-700"
+                >
+                  <option value="">{txt('Move to…', '移动到…')}</option>
+                  {pools.filter(p => p.id !== selectedPool?.id).map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <Button size="sm" variant="outline" disabled={isBulkRunning || !moveTargetId}
+                  onClick={() => runBulkAction('move_pool')}>
+                  {txt('Move', '移动')}
+                </Button>
+              </div>
+              <Button size="sm" variant="outline" disabled={isBulkRunning}
+                className="border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+                onClick={() => runBulkAction('delete')}>
+                <Trash2 className="mr-1 h-3.5 w-3.5" /> {txt('Delete', '删除')}
+              </Button>
+              {isBulkRunning && <RefreshCw className="h-4 w-4 animate-spin text-indigo-500" />}
+            </div>
+          )}
+
           {/* Table area */}
           <div className="flex-1 overflow-auto" translate="no">
             {isLeadsLoading ? (
               <div className="py-20 text-center text-slate-500">{txt('Loading leads...', '正在加载联系人列表...')}</div>
-            ) : filteredLeads.length === 0 ? (
+            ) : leads.length === 0 ? (
               <div className="py-20 text-center text-slate-500">
-                {leads.length === 0 ? txt('No leads in this pool yet.', '该客户池暂无联系人。') : txt('No leads match the current filter.', '没有匹配当前筛选条件的联系人。')}
+                {leadFilter || statusFilter !== 'all'
+                  ? txt('No leads match the current filter.', '没有匹配当前筛选条件的联系人。')
+                  : txt('No leads in this pool yet.', '该客户池暂无联系人。')}
               </div>
             ) : (
               <table className="w-full caption-bottom text-sm">
                 <thead className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-200">
                   <tr className="text-slate-500 text-left text-xs uppercase tracking-wider">
+                    <th className="h-11 px-4 align-middle font-medium w-10">
+                      <input
+                        type="checkbox"
+                        aria-label={txt('Select all', '全选')}
+                        className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-indigo-600"
+                        checked={leads.length > 0 && selectedLeadIds.size === leads.length}
+                        ref={el => { if (el) el.indeterminate = selectedLeadIds.size > 0 && selectedLeadIds.size < leads.length; }}
+                        onChange={toggleSelectAll}
+                      />
+                    </th>
                     <th className="h-11 px-4 align-middle font-medium w-10">#</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Contact', '联系人')}</th>
                     <th className="h-11 px-4 align-middle font-medium">{txt('Company / Domain', '公司 / 域名')}</th>
@@ -518,13 +825,22 @@ export default function PoolsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredLeads.map((lead, idx) => (
-                    <tr 
-                      key={lead.id} 
+                  {leads.map((lead, idx) => (
+                    <tr
+                      key={lead.id}
                       onClick={() => openLeadBrief(lead)}
-                      className="border-b border-slate-100 transition-colors hover:bg-slate-50 cursor-pointer align-top"
+                      className={`border-b border-slate-100 transition-colors cursor-pointer align-top ${selectedLeadIds.has(lead.id) ? 'bg-indigo-50/60 hover:bg-indigo-50' : 'hover:bg-slate-50'}`}
                     >
-                      <td className="py-3 px-4 text-slate-400 text-xs"><span>{idx + 1}</span></td>
+                      <td className="py-3 px-4" onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={txt('Select lead', '选择该线索')}
+                          className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-indigo-600"
+                          checked={selectedLeadIds.has(lead.id)}
+                          onChange={() => toggleLeadSelected(lead.id)}
+                        />
+                      </td>
+                      <td className="py-3 px-4 text-slate-400 text-xs"><span>{leadPage * LEADS_PAGE_SIZE + idx + 1}</span></td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-medium text-slate-900">
@@ -714,6 +1030,194 @@ export default function PoolsPage() {
               </table>
             )}
           </div>
+          <div className="flex items-center justify-between border-t border-slate-200 px-6 py-3 shrink-0">
+            <span className="text-xs text-slate-500">
+              {txt(
+                `Showing ${leadPage * LEADS_PAGE_SIZE + (leads.length ? 1 : 0)}–${leadPage * LEADS_PAGE_SIZE + leads.length}`,
+                `显示第 ${leadPage * LEADS_PAGE_SIZE + (leads.length ? 1 : 0)}–${leadPage * LEADS_PAGE_SIZE + leads.length} 条`,
+              )}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={leadPage === 0 || isLeadsLoading}
+                onClick={() => setLeadPage(page => Math.max(0, page - 1))}
+              >
+                {txt('Previous', '上一页')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasMoreLeads || isLeadsLoading}
+                onClick={() => setLeadPage(page => page + 1)}
+              >
+                {txt('Next', '下一页')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* CSV Import Dialog */}
+      <Dialog open={!!importPool} onOpenChange={(open) => {
+        if (!open) closeImportDialog();
+      }}>
+        <DialogContent className="w-[96vw] max-w-[1000px] sm:max-w-[1000px] max-h-[90vh] overflow-y-auto bg-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5 text-indigo-600" />
+              {txt('Import leads from CSV', '从 CSV 导入线索')}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-5">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-medium text-slate-900">{importPool?.name}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {txt(
+                  'UTF-8 and GB18030 are supported. Maximum 2 MB / 5,000 rows. Existing email and domain duplicates are skipped.',
+                  '支持 UTF-8 和 GB18030，单文件最大 2 MB / 5,000 行；已有邮箱和域名重复项会自动跳过。',
+                )}
+              </p>
+            </div>
+
+            <Input
+              type="file"
+              accept=".csv,.tsv,text/csv,text/tab-separated-values"
+              onChange={event => handleImportFile(event.target.files?.[0] || null)}
+            />
+
+            {isPreviewingImport && (
+              <div className="flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-700">
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                {txt('Reading and checking CSV...', '正在读取并检查 CSV...')}
+              </div>
+            )}
+
+            {importPreview && importMapping && (
+              <>
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <ImportMetric label={txt('Rows', '总行数')} value={importPreview.total_rows} />
+                  <ImportMetric label={txt('Ready', '可导入')} value={importPreview.counts.valid} tone="green" />
+                  <ImportMetric label={txt('Duplicates', '重复')} value={importPreview.counts.duplicate} tone="amber" />
+                  <ImportMetric label={txt('Invalid', '无效')} value={importPreview.counts.invalid} tone="red" />
+                </div>
+
+                <div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-slate-900">{txt('Column mapping', '字段映射')}</h3>
+                      <p className="text-xs text-slate-500">{txt('Map at least Email or Domain / Website.', '至少需要映射“邮箱”或“域名 / 网站”。')}</p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={!importFile || isPreviewingImport}
+                      onClick={() => importPool && importFile && previewCsvImport(importPool, importFile, importMapping)}
+                    >
+                      {txt('Recheck', '重新预检')}
+                    </Button>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {importPreview.fields.map(field => (
+                      <label key={field} className="space-y-1 text-xs font-medium text-slate-600">
+                        <span>{txt(...CSV_FIELD_LABELS[field])}</span>
+                        <select
+                          value={importMapping[field] || ''}
+                          onChange={event => setImportMapping(current => current ? {
+                            ...current,
+                            [field]: event.target.value || null,
+                          } : current)}
+                          className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-900"
+                        >
+                          <option value="">{txt('Not mapped', '不映射')}</option>
+                          {importPreview.headers.map(header => (
+                            <option key={header} value={header}>{header}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {importPreview.mapping_required && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    {txt('Choose an Email or Domain column, then click Recheck.', '请选择邮箱或域名列，然后点击“重新预检”。')}
+                  </div>
+                )}
+
+                {importPreview.preview_rows.length > 0 && (
+                  <div className="overflow-hidden rounded-lg border border-slate-200">
+                    <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      {txt('Preview (first 50 rows)', '预览（前 50 行）')}
+                    </div>
+                    <div className="max-h-[280px] overflow-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="sticky top-0 bg-white text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2">#</th>
+                            <th className="px-3 py-2">{txt('Status', '状态')}</th>
+                            <th className="px-3 py-2">{txt('Company', '公司')}</th>
+                            <th className="px-3 py-2">{txt('Domain', '域名')}</th>
+                            <th className="px-3 py-2">{txt('Email', '邮箱')}</th>
+                            <th className="px-3 py-2">{txt('Reason', '原因')}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importPreview.preview_rows.map(row => (
+                            <tr key={row.row_number} className="border-t border-slate-100">
+                              <td className="px-3 py-2 text-slate-400">{row.row_number}</td>
+                              <td className="px-3 py-2">
+                                <span className={
+                                  row.status === 'valid'
+                                    ? 'text-emerald-600'
+                                    : row.status === 'duplicate'
+                                      ? 'text-amber-600'
+                                      : 'text-rose-600'
+                                }>
+                                  {row.status}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-slate-700">{row.normalized.company_name || '—'}</td>
+                              <td className="px-3 py-2 text-slate-700">{row.normalized.domain || '—'}</td>
+                              <td className="px-3 py-2 text-slate-700">{row.normalized.email || '—'}</td>
+                              <td className="px-3 py-2 text-slate-500">{row.reason || '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 border-t border-slate-200 pt-4">
+                  <Button variant="outline" onClick={closeImportDialog}>
+                    {txt('Cancel', '取消')}
+                  </Button>
+                  <Button
+                    onClick={importCsvLeads}
+                    disabled={
+                      isImporting
+                      || isPreviewingImport
+                      || importPreview.mapping_required
+                      || importPreview.counts.valid === 0
+                    }
+                    className="gap-2"
+                  >
+                    {isImporting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    {isImporting
+                      ? txt('Importing...', '导入中...')
+                      : txt(`Import ${importPreview.counts.valid} leads`, `导入 ${importPreview.counts.valid} 条线索`)}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -729,8 +1233,8 @@ export default function PoolsPage() {
           <DialogHeader className="px-6 pt-5 pb-4 border-b border-slate-100 shrink-0">
             <DialogTitle className="flex flex-col gap-1 pr-8">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
-                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Lead AI Research Brief', '客户 AI 背景调研简介')}</span>
+                <User className="w-5 h-5 text-indigo-600" />
+                <span className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{txt('Lead Details', '客户详细信息')}</span>
               </div>
               <div className="mt-1 text-2xl font-bold text-slate-900">
                 {[selectedLead?.first_name, selectedLead?.last_name].filter(Boolean).join(' ') || (
@@ -758,18 +1262,102 @@ export default function PoolsPage() {
           </DialogHeader>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            {selectedLead && (
+              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                      <User className="h-4 w-4 text-indigo-600" /> {txt('Lead Details', '客户详细信息')}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {txt('Basic contact, qualification, and outreach state are shown even when no AI brief exists.', '即使尚未生成 AI 背景调研，也会先展示基础联系人、评分和触达状态。')}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className={statusBadgeClass(selectedLead.status)}>
+                      {selectedLead.status}
+                    </Badge>
+                    {selectedLead.fit_grade && (
+                      <Badge variant="secondary" className={fitBadgeClass(selectedLead.fit_grade)}>
+                        {txt('Fit', '匹配')} {selectedLead.fit_grade} · {selectedLead.fit_score ?? '—'}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                  <DetailField label={txt('Contact', '联系人')} value={[selectedLead.first_name, selectedLead.last_name].filter(Boolean).join(' ') || '—'} />
+                  <DetailField label={txt('Company', '公司')} value={selectedLead.company_name || '—'} />
+                  <DetailField label={txt('Role', '职位')} value={selectedLead.job_title || '—'} />
+                  <DetailField
+                    label={txt('Email', '邮箱')}
+                    value={selectedLead.email ? (
+                      <a href={`mailto:${selectedLead.email}`} className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.email}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField
+                    label={txt('Domain / Website', '域名 / 网站')}
+                    value={selectedLead.domain ? (
+                      <a href={`https://${selectedLead.domain}`} target="_blank" rel="noopener noreferrer" className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.domain}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField
+                    label={txt('LinkedIn', '领英')}
+                    value={selectedLead.linkedin_url ? (
+                      <a href={selectedLead.linkedin_url} target="_blank" rel="noopener noreferrer" className="break-all text-indigo-600 hover:text-indigo-700">
+                        {selectedLead.linkedin_url}
+                      </a>
+                    ) : '—'}
+                  />
+                  <DetailField label={txt('Email status', '邮箱验证')} value={selectedLead.email_verified ? txt('Verified', '已验证') : (selectedLead.email_validation_status || '—')} />
+                  <DetailField label={txt('Source', '来源')} value={selectedLead.source_channel || '—'} />
+                  <DetailField label={txt('Follow-ups', '跟进次数')} value={String(selectedLead.followup_count ?? 0)} />
+                  <DetailField label={txt('Added', '添加时间')} value={selectedLead.created_at ? formatDate(selectedLead.created_at) : '—'} />
+                  <DetailField label={txt('Updated', '更新时间')} value={selectedLead.updated_at ? formatDate(selectedLead.updated_at) : '—'} />
+                  <DetailField label={txt('Last reply', '最后回复')} value={selectedLead.last_reply_at ? formatRelative(selectedLead.last_reply_at) : '—'} />
+                </div>
+
+                {(selectedLead.qualification_notes || selectedLead.reply_snippet || selectedLead.data_sources) && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                    {selectedLead.qualification_notes && (
+                      <TextBlock label={txt('Qualification notes', '匹配依据')} value={selectedLead.qualification_notes} />
+                    )}
+                    {selectedLead.reply_snippet && (
+                      <TextBlock label={txt('Reply snippet', '回复摘要')} value={selectedLead.reply_snippet} />
+                    )}
+                    {selectedLead.data_sources && (
+                      <TextBlock label={txt('Data sources', '数据来源')} value={selectedLead.data_sources} />
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {isBriefLoading ? (
               <div className="flex flex-col items-center justify-center py-24 space-y-4">
                 <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
                 <p className="text-sm text-slate-500 font-medium animate-pulse">{txt('Running AI deep-research & fetching client brief...', '正在进行 AI 背景调研并获取简介...')}</p>
               </div>
             ) : briefError ? (
-              <div className="text-center py-20">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-3">
-                  <FileText className="w-6 h-6" />
+              <div className="rounded-lg border border-amber-100 bg-amber-50/70 p-4">
+                <div className="flex items-start gap-3">
+                  <div className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-amber-600 ring-1 ring-amber-100">
+                    <FileText className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-semibold text-amber-900">
+                      {txt('AI research brief unavailable', 'AI 背景调研暂不可用')}
+                    </h3>
+                    <p className="mt-1 text-sm text-amber-800">{briefError}</p>
+                    <p className="mt-1 text-xs text-amber-700/80">
+                      {txt('Add a domain or website to this lead, then run AI research again.', '给该客户补充域名或网站后，再运行 AI 背景调研。')}
+                    </p>
+                  </div>
                 </div>
-                <p className="text-sm text-slate-600 font-medium">{briefError}</p>
-                <p className="text-xs text-slate-400 mt-2">{txt('AI will scan the website and generate a brief when you run a workflow.', '当运行工作流开发客户时，AI 会自动浏览其网站并生成此简介。')}</p>
                 {selectedLead?.ai_draft && (
                   <div className="mt-8 text-left border-t border-slate-100 pt-6">
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1009,4 +1597,47 @@ function formatRelative(iso: string) {
   } catch {
     return '—';
   }
+}
+
+function DetailField({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-1 min-h-[20px] break-words text-sm text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+function TextBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</div>
+      <p className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function ImportMetric({
+  label,
+  value,
+  tone = 'slate',
+}: {
+  label: string
+  value: number
+  tone?: 'slate' | 'green' | 'amber' | 'red'
+}) {
+  const toneClasses = {
+    slate: 'border-slate-200 bg-slate-50 text-slate-900',
+    green: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    red: 'border-rose-200 bg-rose-50 text-rose-700',
+  };
+  return (
+    <div className={`rounded-lg border p-3 ${toneClasses[tone]}`}>
+      <div className="text-xs opacity-70">{label}</div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
+    </div>
+  );
 }

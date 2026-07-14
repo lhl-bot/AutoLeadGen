@@ -1,40 +1,48 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, ArrowRight, AlertTriangle, ShieldCheck, Send } from 'lucide-react';
+import { RefreshCw, ArrowRight, AlertTriangle, ShieldCheck, Send, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn, apiFetch } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import type { DeliverabilitySummary, EmailLog } from '@/lib/types';
+
+const PAGE_SIZE = 100;
 
 export default function EmailLogsPage() {
   const { t } = useTranslation();
   const [logs, setLogs] = useState<EmailLog[]>([]);
   const [summary, setSummary] = useState<DeliverabilitySummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await apiFetch('/api/email_logs');
+      const res = await apiFetch(`/api/email_logs?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`);
       if (res.ok) {
-        const data = await res.json();
+        const data: EmailLog[] = await res.json();
         setLogs(data);
+        setHasMore(data.length === PAGE_SIZE);
       }
-      const summaryRes = await apiFetch('/api/deliverability/summary');
-      if (summaryRes.ok) {
-        setSummary(await summaryRes.json());
+      // The summary is global, so only fetch it on the first page.
+      if (page === 0) {
+        const summaryRes = await apiFetch('/api/deliverability/summary');
+        if (summaryRes.ok) {
+          setSummary(await summaryRes.json());
+        }
       }
     } catch (e) {
       console.error(e);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [page]);
 
   useEffect(() => {
     fetchLogs();
-  }, []);
+  }, [fetchLogs]);
 
   return (
     <div>
@@ -90,7 +98,7 @@ export default function EmailLogsPage() {
       <div className="glass-panel rounded-lg overflow-hidden border border-white/10">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/5 text-gray-400 text-xs uppercase tracking-wider">
+            <thead className="bg-slate-50 text-gray-400 text-xs uppercase tracking-wider">
               <tr>
                 <th className="px-6 py-4 font-semibold">{t('Time')}</th>
                 <th className="px-6 py-4 font-semibold">{t('Direction')}</th>
@@ -143,6 +151,32 @@ export default function EmailLogsPage() {
           </table>
         </div>
       </div>
+
+      {(page > 0 || hasMore) && (
+        <div className="mt-5 flex items-center justify-between">
+          <span className="text-xs text-gray-400">
+            {t('Showing')} {page * PAGE_SIZE + (logs.length ? 1 : 0)}–{page * PAGE_SIZE + logs.length}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline" size="sm"
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0 || isLoading}
+              className="gap-1 bg-transparent"
+            >
+              <ChevronLeft className="h-4 w-4" /> {t('Previous')}
+            </Button>
+            <Button
+              variant="outline" size="sm"
+              onClick={() => setPage(p => p + 1)}
+              disabled={!hasMore || isLoading}
+              className="gap-1 bg-transparent"
+            >
+              {t('Next')} <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -23,7 +23,16 @@ export default function RepliesPage() {
     try {
       const res = await apiFetch('/api/replies/');
       if (res.ok) {
-        const data = await res.json();
+        const data: ReplyLead[] = await res.json();
+        // Surface the hottest leads first: handoff-recommended, then most
+        // recently active, then best-fit — so reps reply to the best ones first.
+        data.sort((a, b) => {
+          const handoff = Number(b.handoff_recommended ?? false) - Number(a.handoff_recommended ?? false);
+          if (handoff !== 0) return handoff;
+          const recency = new Date(b.last_reply_at || 0).getTime() - new Date(a.last_reply_at || 0).getTime();
+          if (recency !== 0) return recency;
+          return (b.fit_score ?? -1) - (a.fit_score ?? -1);
+        });
         setReplies(data);
       }
     } catch (e) {
@@ -149,6 +158,11 @@ export default function RepliesPage() {
                           )}>
                             {reply.status}
                           </span>
+                        )}
+                        {reply.reply_intent && (
+                          <Badge variant="secondary" className="bg-indigo-500/10 text-indigo-400 border-indigo-500/20">
+                            {reply.reply_intent}
+                          </Badge>
                         )}
                         {reply.fit_grade && (
                           <Badge variant="secondary" className="bg-sky-500/10 text-sky-400 border-sky-500/20">

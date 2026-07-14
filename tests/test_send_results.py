@@ -54,13 +54,14 @@ def test_record_send_success_marks_sent_and_creates_email_log(db_session):
 def test_record_send_failure_increments_without_changing_status_until_threshold(db_session):
     lead = _lead(db_session, status="drafted", send_fail_count=1)
 
-    update = record_send_failure(db_session, lead)
+    update = record_send_failure(db_session, lead, message="SMTP authentication failed")
 
     db_session.refresh(lead)
     assert update.fail_count == 2
     assert update.permanently_failed is False
     assert lead.status == "drafted"
     assert lead.send_fail_count == 2
+    assert lead.reply_snippet == "Send failed (attempt 2/3): SMTP authentication failed"
 
 
 def test_record_send_failure_marks_permanent_at_threshold(db_session):

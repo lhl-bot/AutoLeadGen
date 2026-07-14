@@ -121,35 +121,59 @@ IMPORTANT: Return ONLY a valid JSON string without markdown formatting."""
     }
 
     try:
-        response = await asyncio.to_thread(
-            requests.post,
-            llm_url,
-            headers=headers,
-            json=payload,
-            timeout=60
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        choices = data.get("choices")
-        if choices and isinstance(choices, list) and len(choices) > 0:
-            msg = choices[0].get("message")
-            if msg and isinstance(msg, dict):
-                content_text = msg.get("content", "").strip()
-                content_text = re.sub(r'<think>.*?</think>', '', content_text, flags=re.DOTALL).strip()
-                # Clean markdown blocks if present
-                content_text = content_text.replace('```json', '').replace('```', '').strip()
-                return json.loads(content_text)
-                
-        raise ValueError("Invalid response from LLM")
-    except Exception as e:
-        logger.error(f"Error generating brief from LLM for {domain}: {e}")
-        return {
-            "company_overview": "Information unavailable.",
-            "pain_points": "Unknown.",
-            "recent_news": "None found.",
-            "value_proposition_alignment": "Unknown."
-        }
+        max_attempts = max(1, int(os.environ.get("RESEARCH_LLM_MAX_RETRIES", "3")))
+    except (TypeError, ValueError):
+        max_attempts = 3
+
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await asyncio.to_thread(
+                requests.post,
+                llm_url,
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            # Retry transient throttling / server errors instead of saving an empty brief.
+            if response.status_code == 429 or response.status_code >= 500:
+                last_err = f"HTTP {response.status_code}"
+                if attempt < max_attempts:
+                    await asyncio.sleep(min(2 ** attempt, 20))
+                    continue
+            response.raise_for_status()
+            data = response.json()
+
+            choices = data.get("choices")
+            if choices and isinstance(choices, list) and len(choices) > 0:
+                msg = choices[0].get("message")
+                if msg and isinstance(msg, dict):
+                    content_text = msg.get("content", "").strip()
+                    content_text = re.sub(r'<think>.*?</think>', '', content_text, flags=re.DOTALL).strip()
+                    # Clean markdown blocks if present
+                    content_text = content_text.replace('```json', '').replace('```', '').strip()
+                    return json.loads(content_text)
+
+            raise ValueError("Invalid response from LLM")
+        except requests.RequestException as e:
+            # Network/throttle error — back off and retry.
+            last_err = str(e)
+            if attempt < max_attempts:
+                await asyncio.sleep(min(2 ** attempt, 20))
+                continue
+            break
+        except Exception as e:
+            # Parsing / non-retryable error.
+            last_err = str(e)
+            break
+
+    logger.error(f"Error generating brief from LLM for {domain}: {last_err}")
+    return {
+        "company_overview": "Information unavailable.",
+        "pain_points": "Unknown.",
+        "recent_news": "None found.",
+        "value_proposition_alignment": "Unknown."
+    }
 
 def _normalize_brief_data(brief_data: dict) -> dict:
     pain_points = brief_data.get("pain_points", "")

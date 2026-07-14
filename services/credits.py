@@ -160,6 +160,34 @@ def _add_transaction(
     return tx
 
 
+def _notify_low_balance(user_id: int, balance: int, required: int) -> None:
+    """Raise an in-app low-balance alert in an independent session.
+
+    Uses its own session so it persists even when the caller rolls back the
+    transaction that hit the InsufficientCreditsError. Never raises.
+    """
+    try:
+        from database import SessionLocal
+        from services.notifications import notify
+
+        ndb = SessionLocal()
+        try:
+            notify(
+                ndb,
+                user_id,
+                "low_balance",
+                "Credit balance is too low",
+                body=f"An action needed {required} credits but your balance is {balance}. Top up to resume automation.",
+                link="/dashboard/api-usage",
+                reference_type="wallet",
+                reference_id=user_id,
+            )
+        finally:
+            ndb.close()
+    except Exception:
+        pass
+
+
 def consume_credits(
     db: Session,
     user_id: int,
@@ -182,6 +210,7 @@ def consume_credits(
 
     wallet = ensure_credit_wallet(db, user_id, initial_balance=0, lock=True)
     if wallet.balance < required:
+        _notify_low_balance(user_id, wallet.balance, required)
         raise InsufficientCreditsError(
             user_id=user_id,
             action=action,

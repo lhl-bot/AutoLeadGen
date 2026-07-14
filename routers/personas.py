@@ -57,6 +57,19 @@ def delete_persona(persona_id: int, db: Session = Depends(get_db), user: models.
     db_persona = query.first()
     if db_persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
+
+    # Block deletion while workflows still reference this persona, otherwise their
+    # persona_id becomes a dangling reference that breaks scoring/drafting.
+    referencing = db.query(models.Workflow).filter(models.Workflow.persona_id == persona_id)
+    if not user.is_admin:
+        referencing = referencing.filter(models.Workflow.user_id == user.id)
+    referencing_names = [w.name for w in referencing.all()]
+    if referencing_names:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Persona is in use by {len(referencing_names)} workflow(s): {', '.join(referencing_names[:5])}. Reassign or delete them first.",
+        )
+
     db.delete(db_persona)
     db.commit()
     return {"ok": True}

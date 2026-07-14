@@ -19,7 +19,9 @@ if not SECRET_KEY:
     raise RuntimeError("JWT_SECRET_KEY must be set in .env")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
-AUTH_USER_CACHE_TTL_SECONDS = float(os.environ.get("AUTH_USER_CACHE_TTL_SECONDS", "300"))
+# Disabled by default so account disable/delete takes effect across all app workers.
+# Single-process deployments may explicitly opt in to a short TTL.
+AUTH_USER_CACHE_TTL_SECONDS = float(os.environ.get("AUTH_USER_CACHE_TTL_SECONDS", "0"))
 _auth_user_cache: dict[int, tuple[float, dict]] = {}
 
 # ─── Password Hashing ───
@@ -58,6 +60,11 @@ def cache_auth_user(user: models.User, credit_balance: Optional[int] = None) -> 
             "credit_balance": credit_balance,
         },
     )
+
+
+def invalidate_auth_user(user_id: int) -> None:
+    """Immediately remove a user from the process-local authentication cache."""
+    _auth_user_cache.pop(user_id, None)
 
 
 def _cached_user(user_id: int) -> Optional[models.User]:

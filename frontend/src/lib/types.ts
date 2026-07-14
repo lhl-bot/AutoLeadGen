@@ -49,6 +49,51 @@ export interface ClientPool {
   workflow_count?: number
 }
 
+export type CsvLeadField =
+  | 'company_name'
+  | 'domain'
+  | 'email'
+  | 'first_name'
+  | 'last_name'
+  | 'job_title'
+  | 'linkedin_url'
+  | 'whatsapp_number'
+
+export interface CsvImportPreviewRow {
+  row_number: number
+  status: 'valid' | 'duplicate' | 'invalid'
+  reason?: string | null
+  normalized: Partial<Record<CsvLeadField, string | null>>
+  raw: Record<string, string>
+}
+
+export interface CsvImportPreview {
+  filename?: string | null
+  encoding: string
+  delimiter: string
+  headers: string[]
+  fields: CsvLeadField[]
+  suggested_mapping: Record<CsvLeadField, string | null>
+  mapping: Record<CsvLeadField, string | null>
+  mapping_required: boolean
+  total_rows: number
+  counts: {
+    valid: number
+    duplicate: number
+    invalid: number
+  }
+  preview_rows: CsvImportPreviewRow[]
+}
+
+export interface CsvImportResult {
+  filename?: string | null
+  pool_id: number
+  total_rows: number
+  imported: number
+  duplicates: number
+  invalid: number
+}
+
 export interface Lead {
   id: number
   workflow_id?: number | null
@@ -65,6 +110,8 @@ export interface Lead {
   followup_count?: number
   last_reply_at?: string | null
   reply_snippet?: string | null
+  has_replied?: boolean
+  reply_intent?: string | null
   // Feedback & verification
   user_rating?: string | null
   email_verified?: boolean
@@ -80,6 +127,27 @@ export interface Lead {
   updated_at?: string | null
 }
 
+export type ReviewQueueKey = 'drafted' | 'needs_email' | 'send_failed' | 'high_intent'
+
+export interface ReviewCenterData {
+  counts: Record<ReviewQueueKey, number>
+  queues: Record<ReviewQueueKey, Lead[]>
+}
+
+export interface BulkLeadResult {
+  lead_id: number
+  ok: boolean
+  status?: string
+  message?: string
+}
+
+export interface BulkLeadResponse {
+  requested: number
+  succeeded: number
+  failed: number
+  results: BulkLeadResult[]
+}
+
 export interface CustomerPersona {
   id: number
   name: string
@@ -91,6 +159,7 @@ export interface CustomerPersona {
   ai_prompt_template?: string | null
   customer_types?: string | null
   product_categories?: string | null
+  company_size?: string | null
   evidence_sources?: string | null
   qualification_rules?: string | null
   disqualification_rules?: string | null
@@ -98,6 +167,11 @@ export interface CustomerPersona {
   positive_examples?: string | null
   negative_examples?: string | null
   created_at: string
+}
+
+export interface FollowupStep {
+  day_offset: number
+  instruction?: string | null
 }
 
 export interface Workflow {
@@ -123,6 +197,8 @@ export interface Workflow {
   send_interval_max: number
   auto_followup: boolean
   max_followups: number
+  followup_steps?: FollowupStep[] | null
+  template_id?: number | null
   search_offset: number
   enable_linkedin: boolean
   enable_whatsapp: boolean
@@ -311,4 +387,78 @@ export interface ApiUsageSummary {
     label: string
     count: number
   }>
+}
+
+export interface OnboardingStep {
+  key: 'persona' | 'email' | 'pool' | 'workflow' | 'leads' | 'review'
+  done: boolean
+  count: number
+}
+
+export interface OnboardingStatus {
+  steps: OnboardingStep[]
+  completed: number
+  total: number
+  all_done: boolean
+}
+
+export interface EmailTemplate {
+  id: number
+  user_id: number
+  name: string
+  category: string
+  ab_group?: string | null
+  variant_label: string
+  subject?: string | null
+  body: string
+  weight: number
+  is_active: boolean
+  created_at: string
+  sent_count?: number
+  replied_count?: number
+  reply_rate?: number
+}
+
+export interface CrmWebhook {
+  id: number
+  name: string
+  url: string
+  events: string
+  is_active: boolean
+  has_secret?: boolean
+  last_status?: number | null
+  last_error?: string | null
+  last_delivered_at?: string | null
+  created_at: string
+}
+
+export interface WorkflowHealth {
+  workflow: { id: number; name: string; status: string }
+  totals: {
+    total_leads: number
+    with_email: number
+    usable_email: number
+    without_email: number
+    needs_email: number
+    invalid_email: number
+    bounced: number
+    leadcontact_leads: number
+    leadcontact_without_email: number
+    leadcontact_usable_email: number
+  }
+  funnel: { found: number; drafted: number; sent: number; replied: number }
+  stuck: Array<{ status: string; count: number; reason: string }>
+  by_source: Record<string, number>
+  recent: { leads_24h: number; emails_sent_24h: number; last_lead_at: string | null }
+  providers: {
+    leadcontact: string
+    leadcontact_remaining_points: number | null
+    snovio: string
+    tavily: string
+    bocha: string
+    sender_accounts: number
+    email_require_verified: boolean
+    auto_send_drafts: boolean
+  }
+  warnings: string[]
 }

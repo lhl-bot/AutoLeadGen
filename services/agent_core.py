@@ -11,7 +11,9 @@ from .search_engine import search_company_results, search_domains
 logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
-load_dotenv(override=True)
+# override=False so explicit process env vars (e.g. ENABLE_* worker flags, DATABASE_URL)
+# are respected instead of being silently clobbered by .env on import.
+load_dotenv(override=False)
 LLM_API_KEY = os.environ.get("LLM_API_KEY", os.environ.get("MINIMAX_API_KEY", ""))
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.minimaxi.com/v1/chat/completions")
 LLM_MODEL = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
@@ -353,7 +355,7 @@ def _pipeline_search_and_find(keywords: str, positions: str, offset: int = 0) ->
             search_url = p.get("search_emails_start")
             if not email and search_url:
                 logger.info(f"[PIPELINE] Step 3 - Fetching email for {name} at {domain}")
-                email = snovio.get_prospect_email(search_url)
+                email = snovio.get_prospect_email(search_url, domain=domain)
             
             # ONLY add prospects that actually have an email
             if email:
@@ -409,7 +411,7 @@ def _pipeline_find_at_domain(domain: str, positions: str) -> str:
         search_url = p.get("search_emails_start")
         if search_url:
             logger.info(f"[PIPELINE] Fetching email for {name}")
-            email = snovio.get_prospect_email(search_url)
+            email = snovio.get_prospect_email(search_url, domain=domain)
         
         results.append({
             "name": name,

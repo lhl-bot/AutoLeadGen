@@ -116,6 +116,8 @@ export default function ApiUsagePage() {
     omnichannel_messages: txt('LinkedIn / WhatsApp messages', 'LinkedIn / WhatsApp 消息'),
     processed_domains: txt('Processed domains', '已处理域名'),
     search_leads: txt('Search-sourced leads', '搜索来源线索'),
+    snovio_audit_events: txt('Snov.io audited calls', 'Snov.io 审计调用'),
+    snovio_estimated_credits: txt('Snov.io estimated credits', 'Snov.io 估算积分'),
     lead_briefs: txt('AI research briefs', 'AI 调研简报'),
     ai_drafts: txt('AI email drafts', 'AI 邮件草稿'),
     chat_messages: txt('AI chat prompts', 'AI 对话请求'),

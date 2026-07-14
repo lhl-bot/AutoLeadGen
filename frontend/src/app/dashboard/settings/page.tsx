@@ -131,9 +131,9 @@ export default function SettingsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Channels')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Omnichannel Settings')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Connect your LinkedIn and WhatsApp accounts to enable multi-channel outreach.')}</p>
+          <p className="mt-2 text-sm text-slate-500">{t('Connect your LinkedIn and WhatsApp accounts to enable multi-channel outreach.')}</p>
         </div>
-        <Button onClick={() => fetchAccounts({ sync: true })} disabled={isSyncing} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+        <Button onClick={() => fetchAccounts({ sync: true })} disabled={isSyncing} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
           <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} /> {isSyncing ? t('Syncing...') : t('Sync status')}
         </Button>
       </div>
@@ -146,14 +146,14 @@ export default function SettingsPage() {
             </h2>
 
             {isLoading ? (
-              <div className="py-8 text-center text-gray-500">{t('Loading channel accounts...')}</div>
+              <div className="py-8 text-center text-slate-500">{t('Loading channel accounts...')}</div>
             ) : fetchError ? (
-              <div className="py-12 text-center text-gray-500 border border-dashed border-red-500/20 rounded-lg">
+              <div className="py-12 text-center text-slate-500 border border-dashed border-red-500/20 rounded-lg">
                 <p>{t('Network error')}</p>
                 <button onClick={() => fetchAccounts()} className="mt-3 text-sm text-indigo-400 hover:text-indigo-300 underline">{t('Refresh')}</button>
               </div>
             ) : accounts.length === 0 ? (
-              <div className="py-12 text-center text-gray-500 border border-dashed border-white/10 rounded-lg">
+              <div className="py-12 text-center text-slate-500 border border-dashed border-slate-200 rounded-lg">
                 {t('No omnichannel accounts connected yet.')}
               </div>
             ) : (
@@ -164,15 +164,15 @@ export default function SettingsPage() {
                   const isConnecting = connectingKey === reconnectKey;
 
                   return (
-                  <div key={acc.id} className="flex flex-col gap-4 p-4 bg-white/5 rounded-lg border border-white/10 sm:flex-row sm:items-center sm:justify-between">
+                  <div key={acc.id} className="flex flex-col gap-4 p-4 bg-slate-50 rounded-lg border border-slate-200 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex min-w-0 items-center gap-4">
-                      <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+                      <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center">
                         {acc.account_type === 'LINKEDIN' ? <span className="text-blue-500 font-bold">in</span> : <MessageSquare className="w-5 h-5 text-green-500" />}
                       </div>
                       <div className="min-w-0">
                         <div className="truncate font-medium text-white">{acc.name || t('Unnamed account')}</div>
-                        <div className="text-sm text-gray-400">{t('Type')}: {acc.account_type}</div>
-                        <div className="text-xs text-gray-500">{t('Status')}: {acc.status}</div>
+                        <div className="text-sm text-slate-500">{t('Type')}: {acc.account_type}</div>
+                        <div className="text-xs text-slate-500">{t('Status')}: {acc.status}</div>
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 sm:justify-end">
@@ -219,7 +219,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <div className="glass-panel rounded-lg p-5 sm:p-6">
             <h2 className="text-xl font-bold mb-4">{t('Add Connections')}</h2>
-            <p className="text-sm text-gray-400 mb-6">{t('Connect your accounts securely via Unipile to enable omnichannel automation.')}</p>
+            <p className="text-sm text-slate-500 mb-6">{t('Connect your accounts securely via Unipile to enable omnichannel automation.')}</p>
 
             <div className="space-y-3">
               <Button onClick={() => connectChannel('LINKEDIN')} className="w-full justify-start gap-3 bg-[#0a66c2] hover:bg-[#0a66c2]/90 text-white h-12">
@@ -229,7 +229,7 @@ export default function SettingsPage() {
                 <MessageSquare className="w-5 h-5" /> {t('Connect WhatsApp')}
               </Button>
               <Link href="/dashboard/emails" className="block w-full">
-                <Button className="w-full justify-start gap-3 bg-white/10 hover:bg-white/20 text-slate-700 h-12 border border-slate-200">
+                <Button className="w-full justify-start gap-3 bg-slate-100 hover:bg-slate-200 text-slate-700 h-12 border border-slate-200">
                   <Mail className="w-5 h-5" /> {t('Add Email via SMTP')}
                 </Button>
               </Link>

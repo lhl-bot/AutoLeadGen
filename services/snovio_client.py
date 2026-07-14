@@ -6,6 +6,8 @@ import os
 import logging
 from typing import Any, Dict, List, Optional
 
+from services.snovio_usage import record_snovio_usage
+
 logger = logging.getLogger(__name__)
 
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
@@ -32,6 +34,20 @@ def _float_env(name: str, default: float, min_value: float = 0.1, max_value: flo
     except (TypeError, ValueError):
         return default
     return max(min_value, min(max_value, value))
+
+
+def _email_status(item: Dict[str, Any]) -> str:
+    return str(
+        item.get("smtp_status")
+        or item.get("status")
+        or item.get("result", {}).get("smtp_status", "")
+    ).lower()
+
+
+def _billable_finder_credits(emails: List[Dict[str, Any]]) -> int:
+    # Snov.io finder APIs generally charge when a valid or unknown email is found.
+    return 1 if any(_email_status(e) in {"valid", "unknown"} for e in emails) else 0
+
 
 class SnovioClient:
     def __init__(self, client_id: str, client_secret: str):
@@ -201,12 +217,33 @@ class SnovioClient:
             timeout=20,
         )
         if not data or not data.get("success"):
+            record_snovio_usage(
+                endpoint="get-domain-emails-count",
+                domain=domain,
+                status="failed",
+                estimated_credits=0,
+            )
             return None
 
         try:
-            return int(data.get("result", 0) or 0)
+            count = int(data.get("result", 0) or 0)
         except (TypeError, ValueError):
+            record_snovio_usage(
+                endpoint="get-domain-emails-count",
+                domain=domain,
+                status="invalid_result",
+                estimated_credits=0,
+            )
             return None
+
+        record_snovio_usage(
+            endpoint="get-domain-emails-count",
+            domain=domain,
+            status="success",
+            result_count=count,
+            estimated_credits=0,
+        )
+        return count
         
     def search_prospects_by_domain(self, domain: str, positions: List[str], max_pages: int = None, allow_broad_fallback: bool = None) -> List[Dict]:
         """Start domain search for prospects and fetch results."""
@@ -275,6 +312,14 @@ class SnovioClient:
             # Check if data is already in initial response
             initial_data = start_data.get("data", [])
             if isinstance(initial_data, list) and initial_data:
+                record_snovio_usage(
+                    endpoint="domain-search/prospects",
+                    domain=domain,
+                    status="completed",
+                    result_count=len(initial_data),
+                    estimated_credits=0,
+                    metadata={"page": page, "positions": normalized_positions},
+                )
                 prospects.extend(initial_data)
                 continue
 
@@ -291,13 +336,29 @@ class SnovioClient:
             page_results = res_data.get("data", []) if res_data.get("status") == "completed" else []
 
             if page_results:
+                record_snovio_usage(
+                    endpoint="domain-search/prospects",
+                    domain=domain,
+                    status="completed",
+                    result_count=len(page_results),
+                    estimated_credits=0,
+                    metadata={"page": page, "positions": normalized_positions},
+                )
                 prospects.extend(page_results)
             else:
+                record_snovio_usage(
+                    endpoint="domain-search/prospects",
+                    domain=domain,
+                    status=res_data.get("status", "empty"),
+                    result_count=0,
+                    estimated_credits=0,
+                    metadata={"page": page, "positions": normalized_positions},
+                )
                 break
 
         return self._dedupe_prospects(prospects)
 
-    def get_prospect_email(self, search_email_start_url: str) -> Optional[str]:
+    def get_prospect_email(self, search_email_start_url: str, domain: Optional[str] = None) -> Optional[str]:
         """Search for a specific prospect's email using the provided start URL."""
         if not search_email_start_url:
             return None
@@ -318,18 +379,37 @@ class SnovioClient:
             logger.info(f"    [SNOVIO] POST {search_email_start_url}")
             start_data = self._request_json("POST", search_email_start_url, headers=headers)
             if not start_data:
+                record_snovio_usage(
+                    endpoint="domain-search/prospect-email",
+                    domain=domain,
+                    status="failed",
+                    estimated_credits=0,
+                )
                 return None
             
             # Case 1: The response already contains email data directly
             if "data" in start_data and isinstance(start_data["data"], dict):
                 emails = start_data["data"].get("emails", [])
                 if emails:
+                    estimated_credits = _billable_finder_credits(emails)
+                    selected_email = None
                     for e in emails:
                         email_addr = e.get("email")
                         smtp_status = e.get("smtp_status", "")
                         logger.info(f"    [SNOVIO] Found email directly: {email_addr} (status: {smtp_status})")
                         if smtp_status == "valid":
-                            return email_addr
+                            selected_email = email_addr
+                            break
+                    record_snovio_usage(
+                        endpoint="domain-search/prospect-email",
+                        domain=domain,
+                        email=selected_email,
+                        status="completed",
+                        result_count=len(emails),
+                        estimated_credits=estimated_credits,
+                    )
+                    if selected_email:
+                        return selected_email
                     # Only return verified emails to reduce bounce rate
                     return None
             
@@ -341,6 +421,12 @@ class SnovioClient:
                 
             if not task_hash:
                 logger.warning(f"    [SNOVIO] No task_hash found in response")
+                record_snovio_usage(
+                    endpoint="domain-search/prospect-email",
+                    domain=domain,
+                    status="missing_task_hash",
+                    estimated_credits=0,
+                )
                 return None
                 
             fallback_url = f"https://api.snov.io/v2/domain-search/prospects/search-emails/result/{task_hash}"
@@ -359,17 +445,45 @@ class SnovioClient:
                 else:
                     emails = []
                     
+                estimated_credits = _billable_finder_credits(emails)
+                selected_email = None
                 for e in emails:
                     email_addr = e.get("email")
                     smtp_status = e.get("smtp_status", "")
                     logger.info(f"    [SNOVIO] Found email: {email_addr} (status: {smtp_status})")
                     if smtp_status == "valid":
-                        return email_addr
+                        selected_email = email_addr
+                        break
+                record_snovio_usage(
+                    endpoint="domain-search/prospect-email",
+                    domain=domain,
+                    email=selected_email,
+                    status=status,
+                    result_count=len(emails),
+                    estimated_credits=estimated_credits,
+                )
+                if selected_email:
+                    return selected_email
                 # Only return verified emails to reduce bounce rate
                 return None
+
+            record_snovio_usage(
+                endpoint="domain-search/prospect-email",
+                domain=domain,
+                status=status,
+                result_count=0,
+                estimated_credits=0,
+            )
                     
         except Exception as e:
             logger.error(f"    [SNOVIO] Exception in get_prospect_email: {e}")
+            record_snovio_usage(
+                endpoint="domain-search/prospect-email",
+                domain=domain,
+                status="exception",
+                estimated_credits=0,
+                metadata={"error": str(e)[:300]},
+            )
             return None
                 
         return None
@@ -385,12 +499,31 @@ class SnovioClient:
         try:
             start_data = self._request_json("POST", start_url, headers=headers, data=form_data)
             if not start_data:
+                record_snovio_usage(
+                    endpoint="email-verification",
+                    email=email,
+                    status="failed",
+                    estimated_credits=0,
+                )
                 return "unknown"
             task_hash = start_data.get("data", {}).get("task_hash")
             if not task_hash:
+                record_snovio_usage(
+                    endpoint="email-verification",
+                    email=email,
+                    status="missing_task_hash",
+                    estimated_credits=0,
+                )
                 return "unknown"
         except Exception as e:
             logger.error(f"Snov.io verify_email exception: {e}")
+            record_snovio_usage(
+                endpoint="email-verification",
+                email=email,
+                status="exception",
+                estimated_credits=0,
+                metadata={"error": str(e)[:300]},
+            )
             return "unknown"
             
         fallback_url = f"https://api.snov.io/v2/email-verification/result?task_hash={task_hash}"
@@ -399,8 +532,25 @@ class SnovioClient:
         res_data = self._poll_result(result_url, headers)
         if res_data.get("status") == "completed":
             data_list = res_data.get("data", [])
+            result_status = "unknown"
             if data_list:
-                return data_list[0].get("result", {}).get("smtp_status", "unknown")
+                result_status = data_list[0].get("result", {}).get("smtp_status", "unknown")
+            record_snovio_usage(
+                endpoint="email-verification",
+                email=email,
+                status=result_status,
+                result_count=len(data_list),
+                estimated_credits=1,
+            )
+            return result_status
+
+        record_snovio_usage(
+            endpoint="email-verification",
+            email=email,
+            status=res_data.get("status", "unknown"),
+            result_count=0,
+            estimated_credits=1,
+        )
                 
         return "unknown"
 
@@ -428,10 +578,25 @@ class SnovioClient:
 
         result_data = self._poll_result(result_url, headers)
         if result_data.get("status") != "completed":
+            record_snovio_usage(
+                endpoint="domain-search/domain-emails",
+                domain=domain,
+                status=result_data.get("status", "unknown"),
+                estimated_credits=0,
+            )
             return []
 
         verified: List[str] = []
-        for item in result_data.get("data", []):
+        domain_email_items = result_data.get("data", [])
+        record_snovio_usage(
+            endpoint="domain-search/domain-emails",
+            domain=domain,
+            status="completed",
+            result_count=len(domain_email_items),
+            estimated_credits=len(domain_email_items),
+        )
+
+        for item in domain_email_items:
             email = item.get("email") if isinstance(item, dict) else None
             if not email or email in verified:
                 continue

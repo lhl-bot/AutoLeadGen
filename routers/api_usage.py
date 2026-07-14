@@ -140,6 +140,29 @@ def _local_usage(db: Session, since: datetime) -> Dict[str, Any]:
         models.Lead.ai_draft.isnot(None),
         models.Lead.updated_at >= since,
     ))
+    snovio_enriched_leads = _count(db.query(func.count(models.Lead.id)).filter(
+        models.Lead.created_at >= since,
+        models.Lead.data_sources.ilike("%snovio%"),
+    ))
+    snovio_audit_events = _count(db.query(func.count(models.SnovioUsageEvent.id)).filter(
+        models.SnovioUsageEvent.created_at >= since,
+    ))
+    snovio_billable_events = _count(db.query(func.count(models.SnovioUsageEvent.id)).filter(
+        models.SnovioUsageEvent.created_at >= since,
+        models.SnovioUsageEvent.estimated_credits > 0,
+    ))
+    snovio_estimated_credits = int(db.query(
+        func.coalesce(func.sum(models.SnovioUsageEvent.estimated_credits), 0)
+    ).filter(
+        models.SnovioUsageEvent.created_at >= since,
+    ).scalar() or 0)
+    snovio_endpoint_rows = db.query(
+        models.SnovioUsageEvent.endpoint,
+        func.count(models.SnovioUsageEvent.id),
+    ).filter(
+        models.SnovioUsageEvent.created_at >= since,
+    ).group_by(models.SnovioUsageEvent.endpoint).all()
+    snovio_endpoint_counts = _group_count(snovio_endpoint_rows)
     chat_messages = _count(db.query(func.count(models.ChatMessage.id)).filter(
         models.ChatMessage.role == "user",
         models.ChatMessage.created_at >= since,
@@ -151,6 +174,11 @@ def _local_usage(db: Session, since: datetime) -> Dict[str, Any]:
         "email_outbound": email_outbound,
         "processed_domains": processed_domains,
         "search_leads": search_leads,
+        "snovio_enriched_leads": snovio_enriched_leads,
+        "snovio_audit_events": snovio_audit_events,
+        "snovio_billable_events": snovio_billable_events,
+        "snovio_estimated_credits": snovio_estimated_credits,
+        "snovio_endpoint_counts": snovio_endpoint_counts,
         "lead_briefs": lead_briefs,
         "ai_drafts": ai_drafts,
         "chat_messages": chat_messages,
@@ -212,7 +240,17 @@ def _snovio_provider(local: Dict[str, Any]) -> Dict[str, Any]:
         os.environ.get("SNOVIO_CLIENT_ID", "").strip()
         and os.environ.get("SNOVIO_CLIENT_SECRET", "").strip()
     )
-    usage = local["source_counts"].get("snovio", 0)
+    audit_events = local.get("snovio_audit_events", 0)
+    enriched_leads = local.get("snovio_enriched_leads", 0)
+    estimated_credits = local.get("snovio_estimated_credits", 0)
+    billable_events = local.get("snovio_billable_events", 0)
+    endpoint_counts = local.get("snovio_endpoint_counts", {})
+    usage = audit_events or enriched_leads
+    usage_label = (
+        f"{audit_events:,} audited Snov.io calls"
+        if audit_events
+        else f"{enriched_leads:,} Snov.io-enriched leads"
+    )
     if not configured:
         return _provider(
             key="snovio",
@@ -221,7 +259,7 @@ def _snovio_provider(local: Dict[str, Any]) -> Dict[str, Any]:
             configured=False,
             status="missing",
             usage_30d=usage,
-            usage_label=f"{usage:,} Snov.io leads",
+            usage_label=usage_label,
         )
 
     try:
@@ -257,7 +295,7 @@ def _snovio_provider(local: Dict[str, Any]) -> Dict[str, Any]:
             configured=True,
             status="warning",
             usage_30d=usage,
-            usage_label=f"{usage:,} Snov.io leads",
+            usage_label=usage_label,
             balance_label="Balance unavailable",
             error=e,
             docs_url="https://snov.io/api",
@@ -270,7 +308,7 @@ def _snovio_provider(local: Dict[str, Any]) -> Dict[str, Any]:
             configured=True,
             status="warning",
             usage_30d=usage,
-            usage_label=f"{usage:,} Snov.io leads",
+            usage_label=usage_label,
             balance_label="Balance unavailable",
             error=payload.get("message") or payload.get("error") or "Snov.io balance query failed",
             docs_url="https://snov.io/api",
@@ -285,11 +323,16 @@ def _snovio_provider(local: Dict[str, Any]) -> Dict[str, Any]:
         configured=True,
         status="ok" if balance is not None else "warning",
         usage_30d=usage,
-        usage_label=f"{usage:,} Snov.io leads",
+        usage_label=usage_label,
         balance_label=f"{_format_number(balance)} credits" if balance is not None else "Balance unavailable",
         balance_value=balance,
         balance_unit="credits",
         details={
+            "audited_calls_30d": audit_events,
+            "estimated_credits_30d": estimated_credits,
+            "billable_events_30d": billable_events,
+            "snovio_enriched_leads_30d": enriched_leads,
+            "prospect_email_calls": endpoint_counts.get("domain-search/prospect-email", 0),
             "unique_recipients_used": data.get("unique_recipients_used") or data.get("recipients_used"),
             "limit_resets_in_days": data.get("limit_resets_in"),
             "subscription_expires_in_days": data.get("expires_in"),
@@ -529,13 +572,17 @@ def _smtp_provider(local: Dict[str, Any]) -> Dict[str, Any]:
 def _realtime_fallback_provider(key: str, local: Dict[str, Any], error: Any) -> Dict[str, Any]:
     usage_by_key = {
         "leadcontact": local["source_counts"].get("leadcontact", 0),
-        "snovio": local["source_counts"].get("snovio", 0),
+        "snovio": local.get("snovio_audit_events", 0) or local.get("snovio_enriched_leads", 0),
         "apollo": local["source_counts"].get("apollo", 0),
         "tavily": local["processed_domains"] + local["search_leads"],
     }
     label_by_key = {
         "leadcontact": f"{usage_by_key['leadcontact']:,} LeadContact leads",
-        "snovio": f"{usage_by_key['snovio']:,} Snov.io leads",
+        "snovio": (
+            f"{local.get('snovio_audit_events', 0):,} audited Snov.io calls"
+            if local.get("snovio_audit_events", 0)
+            else f"{local.get('snovio_enriched_leads', 0):,} Snov.io-enriched leads"
+        ),
         "apollo": f"{usage_by_key['apollo']:,} Apollo leads",
         "tavily": f"{usage_by_key['tavily']:,} local search events",
     }
@@ -624,6 +671,8 @@ def api_usage_summary(
         {"key": "omnichannel_messages", "label": "LinkedIn / WhatsApp messages", "count": local["omnichannel_messages"]},
         {"key": "processed_domains", "label": "Processed domains", "count": local["processed_domains"]},
         {"key": "search_leads", "label": "Search-sourced leads", "count": local["search_leads"]},
+        {"key": "snovio_audit_events", "label": "Snov.io audited calls", "count": local["snovio_audit_events"]},
+        {"key": "snovio_estimated_credits", "label": "Snov.io estimated credits", "count": local["snovio_estimated_credits"]},
         {"key": "lead_briefs", "label": "AI research briefs", "count": local["lead_briefs"]},
         {"key": "ai_drafts", "label": "AI email drafts", "count": local["ai_drafts"]},
         {"key": "chat_messages", "label": "AI chat prompts", "count": local["chat_messages"]},

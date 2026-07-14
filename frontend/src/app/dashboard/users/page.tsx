@@ -336,7 +336,7 @@ export default function UsersPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-white/10 bg-white/5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                <tr className="border-b border-white/10 bg-slate-50 text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   <th className="px-6 py-4">{t('ID')}</th>
                   <th className="px-6 py-4">{t('Username')}</th>
                   <th className="px-6 py-4">{t('Display Name')}</th>
@@ -350,7 +350,7 @@ export default function UsersPage() {
                 {users.map(user => {
                   const isSelf = currentUser?.id === user.id;
                   return (
-                    <tr key={user.id} className="hover:bg-white/5 transition-colors">
+                    <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-6 py-4 font-mono text-xs">{user.id}</td>
                       <td className="px-6 py-4 font-semibold text-white">
                         <div className="flex items-center gap-2">

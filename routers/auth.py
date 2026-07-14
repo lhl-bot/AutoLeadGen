@@ -7,7 +7,7 @@ import models
 from database import get_db
 from services.auth import (
     hash_password, verify_password, create_access_token,
-    cache_auth_user, get_current_user, require_admin
+    cache_auth_user, get_current_user, invalidate_auth_user, require_admin
 )
 from middleware.rate_limit import check_login_rate_limit
 from services.credits import default_initial_balance, ensure_credit_wallet
@@ -155,6 +155,7 @@ def toggle_user_active(
         raise HTTPException(status_code=404, detail="用户不存在")
     user.is_active = not user.is_active
     db.commit()
+    invalidate_auth_user(user.id)
     return {"id": user.id, "is_active": user.is_active}
 
 
@@ -172,4 +173,5 @@ def delete_user(
         raise HTTPException(status_code=404, detail="用户不存在")
     db.delete(user)
     db.commit()
+    invalidate_auth_user(user_id)
     return {"ok": True}

@@ -225,7 +225,9 @@ def score_lead_fit(
         triggers.extend(_split_terms(workflow.manual_handoff_triggers))
     is_contacted = lead.status not in {"found", "needs_email", "invalid_email", "drafted", "send_failed", "bounced", "low_score"}
     intent_matches = _matched_terms(lead.reply_snippet or "", HANDOFF_INTENT_TERMS)
-    handoff = lead.status == "replied" or (is_contacted and score >= 80) or bool(intent_matches)
+    positive_reply = lead.reply_intent in {"interested", "more_info"}
+    legacy_reply = lead.status == "replied" and not lead.reply_intent
+    handoff = positive_reply or legacy_reply or (is_contacted and score >= 80) or bool(intent_matches)
     if intent_matches:
         signals.append(f"handoff signal: {', '.join(intent_matches[:3])}")
 
@@ -278,6 +280,8 @@ def build_outreach_context(
             parts.append(f"Buyer types to prioritize: {persona.customer_types}")
         if persona.product_categories:
             parts.append(f"Relevant product categories: {persona.product_categories}")
+        if getattr(persona, "company_size", None):
+            parts.append(f"Target company size: {persona.company_size}")
         if persona.qualification_rules:
             parts.append(f"Qualification rules: {persona.qualification_rules}")
         if persona.disqualification_rules:

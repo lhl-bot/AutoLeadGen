@@ -15,6 +15,8 @@ import {
   Search,
   Database,
   Briefcase,
+  Contact,
+  MailCheck,
   History,
   Plus,
   Sparkles,
@@ -23,11 +25,15 @@ import {
   UserCog,
   LogOut,
   WalletCards,
+  FileText,
+  KanbanSquare,
+  Webhook,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn, apiUrl } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
+import NotificationBell from '@/components/NotificationBell';
 
 const COLLAPSED_STORAGE_KEY = 'autoleadgen.sidebar.collapsed';
 
@@ -139,18 +145,30 @@ export default function DashboardLayout({
   };
 
   const navigation = [
+    // 工作区 — core daily prospecting
     { name: t('Overview'), href: '/dashboard', icon: LayoutDashboard, section: 'WORKSPACE' },
     { name: t('Client Pools'), href: '/dashboard/pools', icon: Database, section: 'WORKSPACE' },
+    { name: t('Leads'), href: '/dashboard/leads', icon: Contact, section: 'WORKSPACE' },
+    { name: t('Pipeline'), href: '/dashboard/pipeline', icon: KanbanSquare, section: 'WORKSPACE' },
     { name: t('Personas'), href: '/dashboard/personas', icon: Users, section: 'WORKSPACE' },
     { name: t('Workflows'), href: '/dashboard/workflows', icon: Briefcase, section: 'WORKSPACE' },
-    { name: t('Email Config'), href: '/dashboard/emails', icon: Mail, section: 'WORKSPACE' },
-    { name: t('Omnichannel'), href: '/dashboard/settings', icon: Settings, section: 'WORKSPACE' },
-    ...(isAdmin ? [{ name: t('Users'), href: '/dashboard/users', icon: UserCog, section: 'WORKSPACE' }] : []),
 
+    // 触达 — messaging & replies
+    { name: t('Review Center'), href: '/dashboard/review', icon: MailCheck, section: 'OUTREACH' },
+    { name: t('Templates'), href: '/dashboard/templates', icon: FileText, section: 'OUTREACH' },
+    { name: t('Replies'), href: '/dashboard/replies', icon: MessageSquare, section: 'OUTREACH' },
+
+    // AI 助手
     { name: t('AI Sandbox'), href: '/dashboard/sandbox', icon: Search, section: 'ASSISTANT' },
     { name: t('AI Agent'), href: '/dashboard/agent', icon: Bot, section: 'ASSISTANT' },
 
-    { name: t('Replies'), href: '/dashboard/replies', icon: MessageSquare, section: 'REPORTS' },
+    // 配置 — set up once
+    { name: t('Email Config'), href: '/dashboard/emails', icon: Mail, section: 'SETTINGS' },
+    { name: t('Omnichannel'), href: '/dashboard/settings', icon: Settings, section: 'SETTINGS' },
+    { name: t('Integrations'), href: '/dashboard/integrations', icon: Webhook, section: 'SETTINGS' },
+    ...(isAdmin ? [{ name: t('Users'), href: '/dashboard/users', icon: UserCog, section: 'SETTINGS' }] : []),
+
+    // 数据报表
     { name: t('Email Logs'), href: '/dashboard/email-logs', icon: History, section: 'REPORTS' },
     ...(isAdmin ? [{ name: t('API Usage'), href: '/dashboard/api-usage', icon: WalletCards, section: 'REPORTS' }] : []),
   ];
@@ -252,7 +270,7 @@ export default function DashboardLayout({
             </Button>
           </Link>
  
-          {['WORKSPACE', 'ASSISTANT', 'REPORTS'].map((section) => (
+          {['WORKSPACE', 'OUTREACH', 'ASSISTANT', 'SETTINGS', 'REPORTS'].map((section) => (
             <div key={section} className="flex flex-col gap-1">
               <span className={cn(
                 "text-[11px] font-semibold text-slate-400 px-3 mb-2 tracking-[0.14em]",
@@ -352,6 +370,7 @@ export default function DashboardLayout({
               <span>{t('Credits')}</span>
               <span className="tabular-nums">{creditBalance ?? '—'}</span>
             </div>
+            <NotificationBell />
             <LanguageSwitcher />
             <button
               type="button"

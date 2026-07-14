@@ -19,9 +19,10 @@ def select_sender_account(
     workflow: Workflow,
     *,
     per_account_daily_cap: int,
+    preferred_email: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> SenderAccountSelection:
-    """Select a sender account using workflow ownership, round-robin, and daily caps."""
+    """Select a sender using ownership, thread continuity, and daily caps."""
     workflow_emails = (
         db.query(WorkflowEmail)
         .join(WorkflowEmail.email_account)
@@ -57,18 +58,37 @@ def select_sender_account(
     today = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
     capped_accounts: list[tuple[str, int]] = []
 
+    def sent_today(account: EmailAccount) -> int:
+        return db.query(EmailLog).filter(
+            EmailLog.direction == "outbound",
+            EmailLog.from_email == account.email,
+            EmailLog.sent_at >= today,
+        ).count()
+
+    if preferred_email:
+        preferred = next(
+            (account for account in accounts if account.email.lower() == preferred_email.strip().lower()),
+            None,
+        )
+        if not preferred:
+            return SenderAccountSelection(account=None, capped_accounts=[], daily_cap=per_account_daily_cap)
+        preferred_count = sent_today(preferred)
+        if preferred_count < per_account_daily_cap:
+            return SenderAccountSelection(
+                account=preferred,
+                capped_accounts=[],
+                daily_cap=per_account_daily_cap,
+            )
+        return SenderAccountSelection(
+            account=None,
+            capped_accounts=[(preferred.email, preferred_count)],
+            daily_cap=per_account_daily_cap,
+        )
+
     for offset in range(len(accounts)):
         idx = (start_index + offset) % len(accounts)
         candidate = accounts[idx]
-        sent_by_account_today = (
-            db.query(EmailLog)
-            .filter(
-                EmailLog.direction == "outbound",
-                EmailLog.from_email == candidate.email,
-                EmailLog.sent_at >= today,
-            )
-            .count()
-        )
+        sent_by_account_today = sent_today(candidate)
         if sent_by_account_today < per_account_daily_cap:
             return SenderAccountSelection(
                 account=candidate,

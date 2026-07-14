@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Users, Plus, RefreshCw, Trash2, Target, Pencil } from 'lucide-react';
-import { apiFetch } from '@/lib/utils';
+import { apiFetch, cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useTranslation } from '@/lib/i18n';
 import ConfirmDialog from '@/components/ConfirmDialog';
@@ -29,6 +29,7 @@ interface PersonaForm {
   ai_prompt_template: string
   customer_types: string
   product_categories: string
+  company_size: string
   evidence_sources: string
   qualification_rules: string
   disqualification_rules: string
@@ -47,6 +48,7 @@ const emptyPersonaForm: PersonaForm = {
   ai_prompt_template: '',
   customer_types: '',
   product_categories: '',
+  company_size: '',
   evidence_sources: 'website, social media, customs data, historical feedback',
   qualification_rules: '',
   disqualification_rules: '',
@@ -66,6 +68,7 @@ function personaToForm(persona: CustomerPersona): PersonaForm {
     ai_prompt_template: persona.ai_prompt_template || '',
     customer_types: persona.customer_types || '',
     product_categories: persona.product_categories || '',
+    company_size: persona.company_size || '',
     evidence_sources: persona.evidence_sources || '',
     qualification_rules: persona.qualification_rules || '',
     disqualification_rules: persona.disqualification_rules || '',
@@ -253,6 +256,39 @@ export default function PersonasPage() {
                   </div>
                 </div>
 
+                <div className="space-y-2">
+                  <Label>{t('Target Company Size')}</Label>
+                  <p className="text-xs text-gray-400">{t('Used to filter search by headcount. Leave empty for any size.')}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { v: '1_10', l: '1–10' }, { v: '11_50', l: '11–50' },
+                      { v: '51_200', l: '51–200' }, { v: '201_500', l: '201–500' },
+                      { v: '501_1000', l: '501–1,000' }, { v: '1001_5000', l: '1,001–5,000' },
+                      { v: '5001_10000', l: '5,001–10,000' }, { v: '10001', l: '10,000+' },
+                    ].map(opt => {
+                      const selected = formData.company_size.split(',').map(s => s.trim()).filter(Boolean);
+                      const on = selected.includes(opt.v);
+                      return (
+                        <button
+                          key={opt.v}
+                          type="button"
+                          onClick={() => {
+                            const next = on ? selected.filter(s => s !== opt.v) : [...selected, opt.v];
+                            setFormData({ ...formData, company_size: next.join(',') });
+                          }}
+                          className={cn(
+                            'rounded-md border px-3 py-1.5 text-sm transition-colors',
+                            on ? 'border-indigo-500 bg-indigo-500/10 text-indigo-600' : 'border-white/20 text-gray-400 hover:bg-slate-50'
+                          )}
+                          aria-pressed={on}
+                        >
+                          {opt.l}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('Search Keywords')}</Label>
@@ -360,6 +396,10 @@ export default function PersonasPage() {
                     <span className="text-gray-200">{persona.product_categories || '—'}</span>
                   </div>
                   <div>
+                    <span className="text-gray-500 block mb-1">{t('Target Company Size')}</span>
+                    <span className="text-gray-200">{persona.company_size || '—'}</span>
+                  </div>
+                  <div>
                     <span className="text-gray-500 block mb-1">{t('Search Keywords')}</span>
                     <span className="text-indigo-600">{persona.target_keywords || '—'}</span>
                   </div>
@@ -394,7 +434,7 @@ export default function PersonasPage() {
                     </div>
                   )}
                   {persona.ai_prompt_template && (
-                    <div className="mt-4 p-3 bg-white/5 border-l-2 border-indigo-500 rounded text-gray-300 text-xs">
+                    <div className="mt-4 p-3 bg-slate-50 border-l-2 border-indigo-500 rounded text-gray-300 text-xs">
                       <strong>{t('AI Prompt Template')}:</strong> {persona.ai_prompt_template}
                     </div>
                   )}

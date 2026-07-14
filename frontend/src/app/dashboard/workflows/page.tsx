@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User } from 'lucide-react';
+import { Briefcase, Plus, RefreshCw, Trash2, Play, Pause, ScrollText, MessageSquare, Search, Database, Mail, Gauge, Pencil, Globe2, Ship, Trophy, Store, Share2, FolderSearch, User, ChevronLeft, ChevronRight, Activity } from 'lucide-react';
+import WorkflowHealthDialog from '@/components/WorkflowHealthDialog';
 import { apiFetch } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
@@ -19,7 +20,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from '@/lib/i18n';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import type { ClientPool, CustomerPersona, EmailAccount, Workflow, PlaybookPreset } from '@/lib/types';
+import type { ClientPool, CustomerPersona, EmailAccount, EmailTemplate, Workflow, PlaybookPreset } from '@/lib/types';
+
+interface FollowupStepForm {
+  day_offset: number
+  instruction: string
+}
 
 interface WorkflowForm {
   name: string
@@ -43,6 +49,8 @@ interface WorkflowForm {
   send_interval_max: number
   auto_followup: boolean
   max_followups: number
+  followup_steps: FollowupStepForm[]
+  template_id: string
   search_offset: number
   email_account_ids: number[]
   enable_linkedin: boolean
@@ -75,6 +83,8 @@ const defaultWorkflowForm: WorkflowForm = {
   send_interval_max: 300,
   auto_followup: false,
   max_followups: 3,
+  followup_steps: [],
+  template_id: 'none',
   search_offset: 0,
   email_account_ids: [],
   enable_linkedin: false,
@@ -112,6 +122,11 @@ function workflowToForm(workflow: Workflow): WorkflowForm {
     send_interval_max: workflow.send_interval_max || 300,
     auto_followup: Boolean(workflow.auto_followup),
     max_followups: workflow.max_followups || 3,
+    followup_steps: (workflow.followup_steps || []).map(s => ({
+      day_offset: s.day_offset,
+      instruction: s.instruction || '',
+    })),
+    template_id: workflow.template_id ? workflow.template_id.toString() : 'none',
     search_offset: workflow.search_offset || 0,
     email_account_ids: workflow.emails?.map(email => email.id) || [],
     enable_linkedin: Boolean(workflow.enable_linkedin),
@@ -142,6 +157,7 @@ export default function WorkflowsPage() {
   const [pools, setPools] = useState<ClientPool[]>([]);
   const [personas, setPersonas] = useState<CustomerPersona[]>([]);
   const [emails, setEmails] = useState<EmailAccount[]>([]);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [dependenciesLoaded, setDependenciesLoaded] = useState(false);
   const [isDependenciesLoading, setIsDependenciesLoading] = useState(false);
 
@@ -150,6 +166,9 @@ export default function WorkflowsPage() {
   const [editingWorkflowId, setEditingWorkflowId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState<WorkflowForm>(getDefaultWorkflowForm());
+
+  // Health dialog state
+  const [healthWorkflowId, setHealthWorkflowId] = useState<number | null>(null);
 
   // Engine Logs State
   const [isLogsOpen, setIsLogsOpen] = useState(false);
@@ -162,6 +181,7 @@ export default function WorkflowsPage() {
   // Playbook state
   const [playbookPresets, setPlaybookPresets] = useState<PlaybookPreset[]>([]);
   const [showPlaybookSelector, setShowPlaybookSelector] = useState(false);
+  const [wizardStep, setWizardStep] = useState(1);
   const [isGeneratingKeywords, setIsGeneratingKeywords] = useState(false);
 
   // Delete confirmation state
@@ -187,14 +207,16 @@ export default function WorkflowsPage() {
     if (dependenciesLoaded || isDependenciesLoading) return;
     setIsDependenciesLoading(true);
     try {
-      const [poolsRes, personasRes, emailsRes] = await Promise.all([
+      const [poolsRes, personasRes, emailsRes, templatesRes] = await Promise.all([
         apiFetch('/api/client_pools/'),
         apiFetch('/api/personas/'),
-        apiFetch('/api/email_accounts/')
+        apiFetch('/api/email_accounts/'),
+        apiFetch('/api/email_templates/')
       ]);
       if (poolsRes.ok) setPools(await poolsRes.json());
       if (personasRes.ok) setPersonas(await personasRes.json());
       if (emailsRes.ok) setEmails(await emailsRes.json());
+      if (templatesRes.ok) setTemplates(await templatesRes.json());
       setDependenciesLoaded(true);
     } catch (e) {
       console.error('Failed to fetch dependencies', e);
@@ -216,6 +238,7 @@ export default function WorkflowsPage() {
     setEditingWorkflowId(null);
     setFormData(getDefaultWorkflowForm());
     setShowPlaybookSelector(true);
+    setWizardStep(1);
     setIsWorkflowDialogOpen(true);
   };
 
@@ -224,6 +247,7 @@ export default function WorkflowsPage() {
     setEditingWorkflowId(workflow.id);
     setFormData(workflowToForm(workflow));
     setShowPlaybookSelector(false);
+    setWizardStep(1);
     setIsWorkflowDialogOpen(true);
   };
 
@@ -233,7 +257,41 @@ export default function WorkflowsPage() {
       setEditingWorkflowId(null);
       setFormData(getDefaultWorkflowForm());
       setShowPlaybookSelector(false);
+      setWizardStep(1);
     }
+  };
+
+  // Wizard steps: 1 Targeting · 2 Messaging · 3 Delivery · 4 Channels.
+  const WIZARD_STEPS = [
+    t('Targeting'),
+    t('Messaging'),
+    t('Delivery'),
+    t('Channels'),
+  ];
+
+  const validateWizardStep = (step: number): boolean => {
+    if (step === 1) {
+      if (!formData.name.trim()) { toast.error(t('Workflow name is required')); return false; }
+      if (!formData.search_keywords.trim()) { toast.error(t('Search keywords are required')); return false; }
+      if (!formData.target_positions.trim()) { toast.error(t('Target positions are required')); return false; }
+    }
+    return true;
+  };
+
+  const goToNextStep = () => {
+    if (!validateWizardStep(wizardStep)) return;
+    setWizardStep(s => Math.min(WIZARD_STEPS.length, s + 1));
+  };
+
+  const goToPrevStep = () => setWizardStep(s => Math.max(1, s - 1));
+
+  // Intercept form submit: advance the wizard instead of saving until the last step.
+  const handleWizardSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (wizardStep < WIZARD_STEPS.length) { goToNextStep(); return; }
+    // Final guard: step 1 holds all required fields.
+    if (!validateWizardStep(1)) { setWizardStep(1); return; }
+    void handleSaveWorkflow(e);
   };
 
   const selectPlaybook = (preset: PlaybookPreset) => {
@@ -272,6 +330,13 @@ export default function WorkflowsPage() {
     send_interval_min: Number(formData.send_interval_min) || 60,
     send_interval_max: Number(formData.send_interval_max) || 300,
     max_followups: Number(formData.max_followups) || 3,
+    followup_steps: formData.followup_steps.length > 0
+      ? formData.followup_steps.map(s => ({
+          day_offset: Math.max(1, Math.min(90, Number(s.day_offset) || 1)),
+          instruction: s.instruction.trim() || null,
+        }))
+      : null,
+    template_id: formData.template_id === 'none' ? null : parseInt(formData.template_id),
     search_offset: Number(formData.search_offset) || 0,
     linkedin_daily_limit: Number(formData.linkedin_daily_limit) || 20,
   });
@@ -455,15 +520,18 @@ export default function WorkflowsPage() {
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600">{t('Automation')}</p>
           <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">{t('Workflows')}</h1>
-          <p className="mt-2 text-sm text-gray-400">{t('Set up automated pipelines for prospecting and outreach.')}</p>
+          <p className="mt-2 text-sm text-slate-500">{t('Set up automated pipelines for prospecting and outreach.')}</p>
         </div>
+
+        <WorkflowHealthDialog workflowId={healthWorkflowId} onClose={() => setHealthWorkflowId(null)} />
+
         <div className="flex flex-wrap gap-3">
           <Dialog open={isLogsOpen} onOpenChange={(open) => {
             setIsLogsOpen(open);
             if (open) loadEngineLogs();
           }}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="gap-2 bg-black/40 text-gray-300 border-white/20 hover:bg-black/60 hover:text-white">
+              <Button variant="outline" className="gap-2 bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100 hover:text-slate-900">
                 <ScrollText className="w-4 h-4" /> {t('Engine Logs')}
               </Button>
             </DialogTrigger>
@@ -482,7 +550,7 @@ export default function WorkflowsPage() {
             </DialogContent>
           </Dialog>
 
-          <Button onClick={fetchWorkflows} variant="outline" className="gap-2 bg-transparent text-slate-700 border-white/20">
+          <Button onClick={fetchWorkflows} variant="outline" className="gap-2 bg-transparent text-slate-700 border-slate-300">
             <RefreshCw className="w-4 h-4" /> {t('Refresh')}
           </Button>
 
@@ -522,7 +590,29 @@ export default function WorkflowsPage() {
                 </div>
               ) : (
 
-              <form onSubmit={handleSaveWorkflow} className="space-y-6 mt-4">
+              <form onSubmit={handleWizardSubmit} className="space-y-6 mt-4">
+                {/* Step indicator */}
+                <div className="flex items-center gap-1.5">
+                  {WIZARD_STEPS.map((label, i) => {
+                    const n = i + 1;
+                    const active = wizardStep === n;
+                    const done = wizardStep > n;
+                    return (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => { if (n < wizardStep || validateWizardStep(wizardStep)) setWizardStep(n); }}
+                        className={`flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${active ? 'bg-indigo-500/10 text-indigo-600' : done ? 'text-emerald-600' : 'text-muted-foreground hover:bg-muted'}`}
+                      >
+                        <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${active ? 'bg-indigo-600 text-white' : done ? 'bg-emerald-500 text-white' : 'bg-muted text-muted-foreground'}`}>{n}</span>
+                        <span className="hidden sm:inline">{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {wizardStep === 1 && (
+                <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('Workflow Name')} *</Label>
@@ -601,6 +691,11 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
+                </div>
+                )}
+
+                {wizardStep === 2 && (
+                <div className="space-y-6">
                 <div className="space-y-2">
                   <Label>{t('AI Prompt')}</Label>
                   <Textarea value={formData.ai_prompt} onChange={e => setFormData({...formData, ai_prompt: e.target.value})} placeholder="Instructions for AI drafting..." />
@@ -638,7 +733,11 @@ export default function WorkflowsPage() {
                   <Label>{t('Email Signature')}</Label>
                   <Textarea value={formData.email_signature} onChange={e => setFormData({...formData, email_signature: e.target.value})} placeholder="Best regards,..." />
                 </div>
+                </div>
+                )}
 
+                {wizardStep === 3 && (
+                <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('Client Pool')}</Label>
@@ -686,12 +785,123 @@ export default function WorkflowsPage() {
                       <Input type="number" required value={formData.max_followups} onChange={e => setFormData({...formData, max_followups: parseInt(e.target.value) || 3})} />
                     </div>
                   </div>
+
+                  {/* Cold-email source: AI generation vs reusable template (A/B) */}
+                  <div className="mt-4 space-y-2">
+                    <Label>{t('Cold Email Source')}</Label>
+                    <select
+                      value={formData.template_id}
+                      onChange={e => setFormData({ ...formData, template_id: e.target.value })}
+                      className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="none">{t('AI generation (personalized per lead)')}</option>
+                      {templates.map(tpl => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.name}{tpl.ab_group ? ` · A/B: ${tpl.ab_group} (${tpl.variant_label})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      {t('Using a template skips AI generation and research for cold emails. Pick any variant of an A/B group to enable the split.')}
+                    </p>
+                  </div>
+
                   <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer">
                     <input type="checkbox" checked={formData.auto_followup} onChange={e => setFormData({...formData, auto_followup: e.target.checked})} className="accent-indigo-500 w-4 h-4" />
                     {t('Auto Follow-up')} ({t('AI drafts follow-ups for review')})
                   </label>
+
+                  {/* Visual follow-up sequence editor */}
+                  {formData.auto_followup && (
+                    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h5 className="text-sm font-semibold text-slate-800">{t('Follow-up Sequence')}</h5>
+                        {formData.followup_steps.length > 0 && (
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                            {t('Sequence overrides Max Follow-ups')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formData.followup_steps.length > 0
+                          ? t('Custom cadence — each step is sent the set number of days after the previous email. Replies and unsubscribes stop the sequence automatically.')
+                          : t('Using Max Follow-ups with the default interval. Add steps below to customize the timing per round.')}
+                      </p>
+
+                      {formData.followup_steps.length > 0 && (
+                        <ol className="mt-3 space-y-2">
+                          {formData.followup_steps.map((step, i) => {
+                            const cumulativeDay = formData.followup_steps
+                              .slice(0, i + 1)
+                              .reduce((sum, s) => sum + (Number(s.day_offset) || 0), 0);
+                            return (
+                              <li key={i} className="flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-white p-2.5">
+                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-500 text-xs font-semibold text-white">{i + 1}</span>
+                                <span className="text-xs text-slate-500">{t('Follow-up')}</span>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={90}
+                                  value={step.day_offset}
+                                  onChange={e => {
+                                    const v = parseInt(e.target.value) || 1;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      followup_steps: prev.followup_steps.map((s, idx) => idx === i ? { ...s, day_offset: v } : s),
+                                    }));
+                                  }}
+                                  className="h-8 w-16"
+                                />
+                                <span className="text-xs text-slate-500">{t('days after previous email')}</span>
+                                <span className="text-[11px] text-slate-400">· {t('day')} {cumulativeDay}</span>
+                                <Input
+                                  type="text"
+                                  value={step.instruction}
+                                  placeholder={t('Optional: what should this follow-up focus on? (e.g. share a case study)')}
+                                  onChange={e => {
+                                    const v = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      followup_steps: prev.followup_steps.map((s, idx) => idx === i ? { ...s, instruction: v } : s),
+                                    }));
+                                  }}
+                                  className="h-8 min-w-[180px] flex-1"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setFormData(prev => ({ ...prev, followup_steps: prev.followup_steps.filter((_, idx) => idx !== i) }))}
+                                  className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                                  aria-label={t('Remove')}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ol>
+                      )}
+
+                      {formData.followup_steps.length < 6 && (
+                        <button
+                          type="button"
+                          onClick={() => setFormData(prev => ({
+                            ...prev,
+                            followup_steps: [...prev.followup_steps, { day_offset: prev.followup_steps.length === 0 ? 3 : 4, instruction: '' }],
+                          }))}
+                          className="mt-3 inline-flex items-center gap-1 rounded-md border border-dashed border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> {t('Add step')}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
+                </div>
+                )}
+
+                {wizardStep === 4 && (
+                <div className="space-y-6">
                 {/* Omnichannel Settings */}
                 <div className="border-t pt-4">
                   <h4 className="text-sm font-medium text-foreground/80 mb-4">{t('Channel Settings')}</h4>
@@ -725,10 +935,23 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
-                <div className="pt-4 flex justify-end">
-                  <Button type="submit" disabled={isSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white">
-                    {isSaving ? 'Saving...' : editingWorkflowId ? t('Edit Workflow') : t('Save')}
+                </div>
+                )}
+
+                <div className="flex items-center justify-between border-t pt-4">
+                  <Button type="button" variant="ghost" onClick={goToPrevStep} disabled={wizardStep === 1} className="gap-1">
+                    <ChevronLeft className="h-4 w-4" /> {t('Back')}
                   </Button>
+                  <span className="text-xs text-muted-foreground">{wizardStep} / {WIZARD_STEPS.length}</span>
+                  {wizardStep < WIZARD_STEPS.length ? (
+                    <Button type="button" onClick={goToNextStep} className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white">
+                      {t('Next')} <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  ) : (
+                    <Button type="submit" disabled={isSaving} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                      {isSaving ? t('Saving...') : editingWorkflowId ? t('Save Changes') : t('Create Workflow')}
+                    </Button>
+                  )}
                 </div>
               </form>
               )}
@@ -743,9 +966,9 @@ export default function WorkflowsPage() {
       )}
 
       {isLoading ? (
-        <div className="py-20 text-center text-gray-500">{t('Loading workflows...')}</div>
+        <div className="py-20 text-center text-slate-500">{t('Loading workflows...')}</div>
       ) : workflows.length === 0 ? (
-        <div className="glass-panel p-12 text-center text-gray-400 rounded-lg border border-dashed border-white/20">
+        <div className="glass-panel p-12 text-center text-slate-500 rounded-lg border border-dashed border-slate-300">
           <Briefcase className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>{t('No workflows created yet.')} {t('Create your first workflow to start finding leads.')}</p>
         </div>
@@ -755,22 +978,22 @@ export default function WorkflowsPage() {
             const isActive = wf.status === 'active';
             const sources = (wf.search_sources || 'web').split(',').map(item => item.trim()).filter(Boolean);
             return (
-              <div key={wf.id} className={`glass-panel p-5 rounded-lg flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between transition-all ${isActive ? 'border-indigo-500/50 shadow-[0_12px_32px_rgba(79,70,229,0.12)]' : 'border-white/5 opacity-80'}`}>
+              <div key={wf.id} className={`glass-panel p-5 rounded-lg flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between transition-all ${isActive ? 'border-indigo-500/50 shadow-[0_12px_32px_rgba(79,70,229,0.12)]' : 'border-slate-200 opacity-80'}`}>
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
                     <h3 className="font-bold text-lg text-white">{wf.name}</h3>
-                    <Badge variant="outline" className={isActive ? 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50' : 'text-gray-400 border-gray-600'}>
+                    <Badge variant="outline" className={isActive ? 'bg-indigo-500/20 text-indigo-500 border-indigo-500/50' : 'text-slate-500 border-gray-600'}>
                       {isActive ? t('Active') : t('Paused')}
                     </Badge>
                   </div>
-                  <div className="text-sm text-gray-400 mb-3 flex items-center gap-2">
+                  <div className="text-sm text-slate-500 mb-3 flex items-center gap-2">
                     <Search className="h-4 w-4 text-indigo-500" />
                     {wf.search_keywords || '—'}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
                     {wf.client_pool_name && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-300">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-700">
                         <Database className="h-3.5 w-3.5" /> {wf.client_pool_name}
                       </span>
                     )}
@@ -801,7 +1024,7 @@ export default function WorkflowsPage() {
                       </span>
                     )}
                     {wf.playbook_type && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-300">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-50 text-slate-700">
                         {wf.playbook_type}
                       </span>
                     )}
@@ -831,31 +1054,38 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-4 border-t border-white/10 pt-4 xl:ml-6 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
+                <div className="flex flex-col gap-4 border-t border-slate-200 pt-4 xl:ml-6 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
                   <div className="grid grid-cols-4 gap-5 text-center">
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-white">{wf.leads_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Total')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Total')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-emerald-400">{wf.contactable_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Contactable')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Contactable')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-amber-400">{wf.needs_email_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Needs Email')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Needs Email')}</span>
                     </div>
                     <div className="flex flex-col items-center">
                       <span className="text-2xl font-bold text-orange-400">{wf.low_score_count || 0}</span>
-                      <span className="text-xs text-gray-500 uppercase">{t('Low Score')}</span>
+                      <span className="text-xs text-slate-500 uppercase">{t('Low Score')}</span>
                     </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                     <Button
+                      onClick={() => setHealthWorkflowId(wf.id)}
+                      variant="outline"
+                      className="gap-2 w-24 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
+                    >
+                      <Activity className="w-4 h-4" /> {t('Health')}
+                    </Button>
+                    <Button
                       onClick={() => openEditDialog(wf)}
                       variant="outline"
-                      className="gap-2 w-24 bg-transparent border-white/20 text-gray-200 hover:bg-white/10"
+                      className="gap-2 w-24 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
                     >
                       <Pencil className="w-4 h-4" /> {t('Edit')}
                     </Button>
@@ -863,7 +1093,7 @@ export default function WorkflowsPage() {
                       onClick={() => startWorkflowSearch(wf.id)}
                       disabled={searchingWorkflowId === wf.id}
                       variant="outline"
-                      className="gap-2 w-32 bg-transparent border-white/20 text-gray-200 hover:bg-white/10"
+                      className="gap-2 w-32 bg-transparent border-slate-300 text-slate-700 hover:bg-slate-100"
                     >
                       <Search className="w-4 h-4" /> {searchingWorkflowId === wf.id ? 'Finding...' : 'Find Leads'}
                     </Button>
@@ -871,7 +1101,7 @@ export default function WorkflowsPage() {
                       onClick={() => toggleWorkflow(wf.id)}
                       disabled={togglingWorkflowId === wf.id}
                       variant={isActive ? "secondary" : "default"}
-                      className={`gap-2 w-28 ${isActive ? 'bg-white/10 text-slate-700 hover:bg-white/20' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+                      className={`gap-2 w-28 ${isActive ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                     >
                       {togglingWorkflowId === wf.id ? (
                         <><RefreshCw className="w-4 h-4 animate-spin" /> {t('Switching...')}</>
@@ -881,7 +1111,7 @@ export default function WorkflowsPage() {
                         <><Play className="w-4 h-4" /> {t('Start')}</>
                       )}
                     </Button>
-                    <Button onClick={() => deleteWorkflow(wf.id)} variant="ghost" size="icon" className="text-gray-500 hover:text-rose-500 hover:bg-red-400/10">
+                    <Button onClick={() => deleteWorkflow(wf.id)} variant="ghost" size="icon" className="text-slate-500 hover:text-rose-500 hover:bg-red-400/10">
                       <Trash2 className="w-4 h-4" />
                     </Button>
                   </div>

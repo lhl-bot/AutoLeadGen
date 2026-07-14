@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
         source: '/api/replies',
         destination: `${backendUrl}/api/replies/`,
       },
+      {
+        source: '/api/notifications',
+        destination: `${backendUrl}/api/notifications/`,
+      },
       // Fallback for all other endpoints
       {
         source: '/api/:path*',

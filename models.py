@@ -44,6 +44,7 @@ class CustomerPersona(Base):
     ai_prompt_template = Column(Text, doc="Template for the AI to generate the email")
     customer_types = Column(Text, nullable=True, doc="Comma separated buyer types, e.g., distributor, agent, brand")
     product_categories = Column(Text, nullable=True, doc="Comma separated product categories to match")
+    company_size = Column(Text, nullable=True, doc="Comma separated target company-size buckets (LeadContact enum: 1_10,11_50,51_200,201_500,501_1000,1001_5000,5001_10000,10001)")
     evidence_sources = Column(Text, nullable=True, doc="Preferred evidence sources: website, customs, social, trade show")
     qualification_rules = Column(Text, nullable=True, doc="Positive fit rules used by lead scoring")
     disqualification_rules = Column(Text, nullable=True, doc="Negative fit rules used by lead scoring")
@@ -71,6 +72,8 @@ class Workflow(Base):
     send_interval_max = Column(Integer, default=300)
     auto_followup = Column(Boolean, default=False)
     max_followups = Column(Integer, default=3)
+    followup_steps = Column(JSON, nullable=True, doc="Ordered cold follow-up sequence: [{day_offset, instruction?}]. Overrides max_followups + global interval when set.")
+    template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, doc="When set, cold drafts use this template (A/B group) instead of pure AI generation")
     search_offset = Column(Integer, default=0)
     
     # Playbook & warmup settings
@@ -181,6 +184,10 @@ class Lead(Base):
     followup_count = Column(Integer, default=0)
     last_reply_at = Column(DateTime, nullable=True)
     reply_snippet = Column(Text, nullable=True)
+    # Durable reply milestone, independent of the mutable automation status.
+    # A lead can move replied -> drafted -> sent while this remains true.
+    has_replied = Column(Boolean, default=False, nullable=False, index=True)
+    reply_intent = Column(String(50), nullable=True, doc="interested, more_info, not_interested, unsubscribe, other")
     
     # Feedback & verification fields
     user_rating = Column(String(20), nullable=True, doc="User feedback: positive, negative")
@@ -198,6 +205,13 @@ class Lead(Base):
     linkedin_status = Column(String(50), default="unconnected") # unconnected, requested, connected, invalid_profile, provider_limited, failed
     linkedin_sent = Column(Boolean, default=False)
     whatsapp_sent = Column(Boolean, default=False)
+
+    # A/B template attribution for the most recent template-based draft/send.
+    template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, index=True)
+    template_variant = Column(String(20), nullable=True, doc="Variant label of the template used, e.g. A/B")
+
+    # Manual CRM-style sales stage, independent of the automation `status`.
+    sales_stage = Column(String(30), default="new", index=True, doc="new, contacted, interested, quoting, won, lost")
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -292,6 +306,91 @@ class CreditTransaction(Base):
     wallet = relationship("CreditWallet", back_populates="transactions")
     user = relationship("User", foreign_keys=[user_id])
     created_by = relationship("User", foreign_keys=[created_by_user_id])
+
+
+class EmailTemplate(Base):
+    """Reusable outreach template with {{variable}} placeholders and A/B variants.
+
+    Variants are grouped by ``ab_group``; when a workflow points at any template in
+    a group, the engine picks an active variant by ``weight`` and records which one
+    was used on the lead for per-variant reply-rate reporting.
+    """
+    __tablename__ = "email_templates"
+    __table_args__ = (
+        Index("ix_email_templates_user_group", "user_id", "ab_group"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    category = Column(String(50), default="cold", doc="cold, followup")
+    ab_group = Column(String(100), nullable=True, index=True, doc="Groups A/B variants; null = standalone")
+    variant_label = Column(String(20), default="A", doc="A, B, C ...")
+    subject = Column(String(500), nullable=True)
+    body = Column(Text, nullable=False)
+    weight = Column(Integer, default=1, doc="Relative A/B split weight")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class CrmWebhook(Base):
+    """Outbound webhook that pushes lead events to an external CRM/endpoint."""
+    __tablename__ = "crm_webhooks"
+    __table_args__ = (
+        Index("ix_crm_webhooks_user_active", "user_id", "is_active"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    url = Column(String(1000), nullable=False)
+    secret = Column(String(255), nullable=True, doc="Optional HMAC-SHA256 signing secret")
+    events = Column(String(500), default="lead.won", doc="Comma-separated event names this endpoint subscribes to")
+    is_active = Column(Boolean, default=True)
+    last_status = Column(Integer, nullable=True, doc="HTTP status of the last delivery attempt")
+    last_error = Column(Text, nullable=True)
+    last_delivered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Notification(Base):
+    """In-app alert for the owning user (high-intent reply, send failure, low balance...)."""
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_read_created", "user_id", "is_read", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type = Column(String(50), nullable=False, doc="high_intent_reply, send_failed, low_balance, email_account_error")
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    link = Column(String(255), nullable=True, doc="In-app deep link, e.g. /dashboard/replies")
+    reference_type = Column(String(50), nullable=True)
+    reference_id = Column(Integer, nullable=True)
+    is_read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class SnovioUsageEvent(Base):
+    """Local audit trail for Snov.io API calls and estimated credit impact."""
+    __tablename__ = "snovio_usage_events"
+    __table_args__ = (
+        Index("ix_snovio_usage_events_created_endpoint", "created_at", "endpoint"),
+        Index("ix_snovio_usage_events_domain_created", "domain", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    endpoint = Column(String(120), nullable=False, index=True)
+    domain = Column(String(255), nullable=True, index=True)
+    email = Column(String(255), nullable=True, index=True)
+    status = Column(String(50), nullable=True)
+    result_count = Column(Integer, default=0, nullable=False)
+    estimated_credits = Column(Integer, nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 
 class LeadBrief(Base):
     __tablename__ = "lead_briefs"

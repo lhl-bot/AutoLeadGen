@@ -24,6 +24,7 @@ export default function LoginPage() {
     try {
       const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -37,9 +38,9 @@ export default function LoginPage() {
 
       const data = await res.json();
       
-      // Store token and user info
+      // The session token is held in an HttpOnly cookie; cache only display data.
       if (typeof window !== 'undefined') {
-        localStorage.setItem('auth_token', data.token);
+        localStorage.removeItem('auth_token');
         localStorage.setItem('auth_user', JSON.stringify(data.user));
       }
 
@@ -77,8 +78,9 @@ export default function LoginPage() {
 
           <form onSubmit={handleLogin} className="space-y-6">
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">{t('Username')}</label>
+              <label htmlFor="login-username" className="mb-2 block text-sm font-medium text-slate-700">{t('Username')}</label>
               <input
+                id="login-username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -88,8 +90,9 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="mb-2 block text-sm font-medium text-slate-700">{t('Password')}</label>
+              <label htmlFor="login-password" className="mb-2 block text-sm font-medium text-slate-700">{t('Password')}</label>
               <input
+                id="login-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -100,7 +103,7 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+              <div role="alert" aria-live="assertive" className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-700 text-sm">
                 {error}
               </div>
             )}

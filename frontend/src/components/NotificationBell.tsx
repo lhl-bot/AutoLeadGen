@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bell, MailCheck, AlertTriangle, WalletCards, CheckCheck } from 'lucide-react';
-import { apiFetch } from '@/lib/utils';
+import { apiFetch, isAbortError } from '@/lib/utils';
 import { useTranslation } from '@/lib/i18n';
 
 interface NotificationItem {
@@ -42,7 +42,7 @@ function timeAgo(iso: string, zh: boolean): string {
   return zh ? `${days} 天前` : `${days}d ago`;
 }
 
-export default function NotificationBell() {
+export default function NotificationBell({ readOnly = false }: { readOnly?: boolean }) {
   const { language } = useTranslation();
   const zh = language === 'zh';
   const txt = (en: string, z: string) => (zh ? z : en);
@@ -52,23 +52,27 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  const fetchNotifications = useCallback(async () => {
+  const fetchNotifications = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await apiFetch('/api/notifications?limit=20');
+      const res = await apiFetch('/api/notifications?limit=20', { signal });
       if (res.ok) {
         const data = await res.json();
         setItems(data.items || []);
         setUnread(data.unread_count || 0);
       }
     } catch (e) {
-      console.error(e);
+      if (!isAbortError(e)) console.warn('Notifications are temporarily unavailable.');
     }
   }, []);
 
   useEffect(() => {
-    fetchNotifications();
-    const timer = window.setInterval(fetchNotifications, POLL_MS);
-    return () => window.clearInterval(timer);
+    const controller = new AbortController();
+    void fetchNotifications(controller.signal);
+    const timer = window.setInterval(() => void fetchNotifications(controller.signal), POLL_MS);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
   }, [fetchNotifications]);
 
   // Close on outside click.
@@ -83,6 +87,7 @@ export default function NotificationBell() {
   const markAllRead = async () => {
     setUnread(0);
     setItems(prev => prev.map(i => ({ ...i, is_read: true })));
+    if (readOnly) return;
     try { await apiFetch('/api/notifications/read-all', { method: 'POST' }); } catch (e) { console.error(e); }
   };
 
@@ -90,7 +95,9 @@ export default function NotificationBell() {
     if (!item.is_read) {
       setItems(prev => prev.map(i => (i.id === item.id ? { ...i, is_read: true } : i)));
       setUnread(u => Math.max(0, u - 1));
-      try { await apiFetch(`/api/notifications/${item.id}/read`, { method: 'POST' }); } catch (e) { console.error(e); }
+      if (!readOnly) {
+        try { await apiFetch(`/api/notifications/${item.id}/read`, { method: 'POST' }); } catch (e) { console.error(e); }
+      }
     }
     setOpen(false);
     if (item.link) router.push(item.link);
@@ -102,7 +109,9 @@ export default function NotificationBell() {
         type="button"
         onClick={() => setOpen(o => !o)}
         title={txt('Notifications', '通知')}
-        className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+        aria-label={txt('Notifications', '通知')}
+        aria-expanded={open}
+        className="relative inline-flex min-h-11 min-w-11 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
       >
         <Bell className="h-4 w-4" />
         {unread > 0 && (
@@ -115,9 +124,12 @@ export default function NotificationBell() {
       {open && (
         <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
-            <span className="text-sm font-semibold text-slate-800">{txt('Notifications', '通知')}</span>
+            <span className="text-sm font-semibold text-slate-800">
+              {txt('Notifications', '通知')}
+              {readOnly ? <span className="ml-2 text-[11px] font-normal text-slate-500">{txt('local read state', '仅本地已读')}</span> : null}
+            </span>
             {unread > 0 && (
-              <button onClick={markAllRead} className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700">
+              <button onClick={markAllRead} className="flex min-h-11 items-center gap-1 px-2 text-xs text-indigo-600 hover:text-indigo-700">
                 <CheckCheck className="h-3.5 w-3.5" /> {txt('Mark all read', '全部已读')}
               </button>
             )}

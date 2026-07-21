@@ -8,6 +8,7 @@ import {
   CheckCheck,
   Inbox,
   Keyboard,
+  FileSearch,
   Loader2,
   MailCheck,
   MailQuestion,
@@ -46,6 +47,12 @@ const QUEUES: Array<{
     label: 'Missing email',
     description: 'Leads that need enrichment before outreach.',
     icon: MailQuestion,
+  },
+  {
+    key: 'needs_research',
+    label: 'Research needed',
+    description: 'Company or product evidence must be completed before outreach.',
+    icon: FileSearch,
   },
   {
     key: 'send_failed',
@@ -166,6 +173,25 @@ export default function ReviewQueuePage() {
     }
   }, [fetchCenter, t]);
 
+  const retryResearch = useCallback(async (lead: Lead | null) => {
+    if (!lead) return;
+    setSendingId(lead.id);
+    try {
+      const res = await apiFetch(`/api/leads/${lead.id}/research/retry`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(formatApiDetail(data.detail, t('Research retry failed')));
+        return;
+      }
+      toast.success(t('Research refresh queued'));
+      await fetchCenter();
+    } catch {
+      toast.error(t('Research retry failed'));
+    } finally {
+      setSendingId(null);
+    }
+  }, [fetchCenter, t]);
+
   const runBulk = useCallback(async (action: 'send' | 'reject' | 'retry') => {
     if (!checkedIds.length) return;
     setBulkAction(action);
@@ -254,7 +280,7 @@ export default function ReviewQueuePage() {
         </div>
       </div>
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {QUEUES.map(queue => {
           const Icon = queue.icon;
           const count = center?.counts[queue.key] || 0;
@@ -411,6 +437,13 @@ export default function ReviewQueuePage() {
                 </div>
               )}
 
+              {selected.automation_block_reason && (
+                <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-500">{t('Automation block')}</p>
+                  <p className="text-sm text-gray-300">{selected.automation_block_reason}</p>
+                </div>
+              )}
+
               {selected.reply_snippet && (
                 <div className="mb-4 rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-4">
                   <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-indigo-400">{t('Latest reply')}</p>
@@ -451,6 +484,17 @@ export default function ReviewQueuePage() {
                   <ActiveQueueIcon className="mx-auto mb-3 h-8 w-8 opacity-60" />
                   <p className="font-medium text-white">{t(activeConfig.label)}</p>
                   <p className="mt-1 text-sm">{t(activeConfig.description)}</p>
+                  {activeQueue === 'needs_research' && (
+                    <Button
+                      onClick={() => retryResearch(selected)}
+                      disabled={sendingId === selected.id || !selected.domain}
+                      className="mt-4 gap-2"
+                    >
+                      {sendingId === selected.id
+                        ? <><Loader2 className="h-4 w-4 animate-spin" /> {t('Refreshing...')}</>
+                        : <><RefreshCw className="h-4 w-4" /> {t('Retry research')}</>}
+                    </Button>
+                  )}
                 </div>
               )}
             </div>

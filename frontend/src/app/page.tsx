@@ -4,15 +4,12 @@ import Link from 'next/link';
 import {
   ArrowRight,
   BarChart3,
-  CheckCircle2,
   Clock,
   Globe,
   Mail,
   MessageCircle,
-  Play,
   Search,
   Target,
-  Users,
   Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -25,14 +22,14 @@ export default function LandingPage() {
 
   const sequence = [
     { icon: Mail, title: t('Day 1 Email'), detail: t('Day 1 Detail'), color: 'text-sky-300', bg: 'bg-sky-400/10' },
-    { icon: Users, title: t('Day 3 LinkedIn'), detail: t('Day 3 Detail'), color: 'text-blue-300', bg: 'bg-blue-400/10' },
+    { icon: Mail, title: t('Day 3 LinkedIn'), detail: t('Day 3 Detail'), color: 'text-blue-300', bg: 'bg-blue-400/10' },
     { icon: MessageCircle, title: t('Day 5 WhatsApp'), detail: t('Day 5 Detail'), color: 'text-emerald-300', bg: 'bg-emerald-400/10' },
   ];
 
   const features = [
     { icon: Target, title: t('Lead Sourcing'), desc: t('Lead Sourcing Desc') },
     { icon: Globe, title: t('Deep Research'), desc: t('Deep Research Desc') },
-    { icon: Users, title: t('Multichannel'), desc: t('Multichannel Desc') },
+    { icon: Mail, title: t('Multichannel'), desc: t('Multichannel Desc') },
     { icon: Zap, title: t('Auto-Drafting'), desc: t('Auto-Drafting Desc') },
     { icon: BarChart3, title: t('Unified Inbox'), desc: t('Unified Inbox Desc') },
     { icon: Clock, title: t('24/7 Execution'), desc: t('24/7 Execution Desc') },
@@ -51,7 +48,7 @@ export default function LandingPage() {
           <div className="hidden items-center gap-7 text-sm font-medium text-slate-300 md:flex">
             <Link href="#product" className="transition-colors hover:text-white">{t('Product')}</Link>
             <Link href="#solutions" className="transition-colors hover:text-white">{t('Solutions')}</Link>
-            <Link href="#pricing" className="transition-colors hover:text-white">{t('Pricing')}</Link>
+            <Link href="#pilot" className="transition-colors hover:text-white">邀请制试点</Link>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/login" className="hidden text-sm font-medium text-slate-300 transition-colors hover:text-white sm:inline">
@@ -59,7 +56,7 @@ export default function LandingPage() {
             </Link>
             <Link href="/login">
               <Button className="h-9 bg-white px-4 text-slate-950 hover:bg-slate-200">
-                {t('Get Started')}
+                申请试用
               </Button>
             </Link>
             <LanguageSwitcher />
@@ -135,7 +132,7 @@ export default function LandingPage() {
             <Badge variant="outline" className="mb-6 border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-emerald-100">
               <span className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                AutoLeadGen 2.0 is live
+                {t('Release Scope')}
               </span>
             </Badge>
             <h1 className="text-5xl font-semibold leading-none sm:text-6xl lg:text-7xl">
@@ -145,18 +142,12 @@ export default function LandingPage() {
               {t('Hero Desc')}
             </p>
             <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-              <Link href="/login" className="w-full sm:w-auto">
+              <Link href="/login?intent=pilot" className="w-full sm:w-auto">
                 <Button size="lg" className="w-full bg-white text-slate-950 hover:bg-slate-200">
-                  {t('Free Trial')} <ArrowRight className="h-4 w-4" />
+                  申请试用 <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-              <Button size="lg" variant="outline" className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10 sm:w-auto">
-                <Play className="h-4 w-4" /> {t('Watch Demo')}
-              </Button>
-            </div>
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-4 text-sm text-slate-400">
-              <span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> {t('No CC')}</span>
-              <span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-300" /> {t('14 Days')}</span>
+              <Link href="/login" className="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-white/20 bg-white/5 px-4 text-sm font-medium text-white hover:bg-white/10 sm:w-auto">登录</Link>
             </div>
           </div>
         </div>
@@ -212,16 +203,16 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section id="pricing" className="bg-white py-20 text-slate-950">
+      <section id="pilot" className="bg-white py-20 text-slate-950">
         <div className="mx-auto max-w-4xl px-5 text-center sm:px-6">
           <div className="mx-auto mb-6 flex h-12 w-12 items-center justify-center rounded-lg bg-slate-950 text-white">
             <Search className="h-5 w-5" />
           </div>
-          <h2 className="text-3xl font-semibold sm:text-4xl">{t('CTA Title')}</h2>
-          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-600">{t('CTA Desc')}</p>
-          <Link href="/login" className="mt-8 inline-flex">
+          <h2 className="text-3xl font-semibold sm:text-4xl">申请加入邀请制试点</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-600">试点账号由团队审核开通并预配置发件邮箱；当前不承诺公开注册、免费额度或自助计费。</p>
+          <Link href="/login?intent=pilot" className="mt-8 inline-flex">
             <Button size="lg" className="bg-slate-950 text-white hover:bg-slate-800">
-              {t('CTA Button')} <ArrowRight className="h-4 w-4" />
+              申请试用 <ArrowRight className="h-4 w-4" />
             </Button>
           </Link>
         </div>

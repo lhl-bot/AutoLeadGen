@@ -6,7 +6,7 @@ import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
   title: "AutoLeadGen | AI B2B Sales Agent",
-  description: "Automate your outbound sales with AI-driven research and omnichannel reach.",
+  description: "Evidence-backed B2B research, reviewed email outreach, reply handling, and production safety controls.",
   other: {
     google: "notranslate",
   },

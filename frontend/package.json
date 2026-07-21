@@ -2,11 +2,22 @@
   "name": "frontend",
   "version": "0.1.0",
   "private": true,
+  "overrides": {
+    "@babel/core": "7.29.7",
+    "hono": "4.12.30",
+    "postcss": "8.5.14",
+    "qs": "6.15.3"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "generate:api-types": "openapi-typescript openapi.v2.json -o src/features/v2/openapi.generated.ts",
+    "check:api-types": "openapi-typescript openapi.v2.json -o src/features/v2/openapi.generated.ts --check"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -14,23 +25,35 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "lucide-react": "^1.16.0",
-    "next": "16.2.6",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
     "recharts": "^3.8.1",
-    "shadcn": "^4.7.0",
+    "shadcn": "4.13.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4.7.0",
+    "axe-core": "^4.10.3",
     "eslint": "^9",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "16.2.10",
+    "jsdom": "^26.1.0",
+    "openapi-typescript": "^7.6.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "6.4.3",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "3.2.7"
   }
 }

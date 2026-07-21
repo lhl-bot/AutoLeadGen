@@ -1,8 +1,21 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
+  poweredByHeader: false,
+  deploymentId: process.env.DEPLOYMENT_VERSION,
   trailingSlash: false,
   allowedDevOrigins: ['127.0.0.1'],
+  async redirects() {
+    return [
+      { source: '/dashboard/work', destination: '/dashboard', permanent: false },
+      { source: '/dashboard/find-customers', destination: '/dashboard/customers?view=find', permanent: false },
+      { source: '/dashboard/get-started', destination: '/dashboard/customers?view=find', permanent: false },
+      { source: '/dashboard/campaigns', destination: '/dashboard/admin/plans', permanent: false },
+      { source: '/dashboard/opportunities', destination: '/dashboard/results?view=opportunities', permanent: false },
+      { source: '/dashboard/analytics', destination: '/dashboard/results?view=analytics', permanent: false },
+    ];
+  },
   async rewrites() {
     const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8001";
     return [

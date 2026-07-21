@@ -110,6 +110,8 @@ export interface Lead {
   followup_count?: number
   last_reply_at?: string | null
   reply_snippet?: string | null
+  automation_block_reason?: string | null
+  automation_blocked_at?: string | null
   has_replied?: boolean
   reply_intent?: string | null
   // Feedback & verification
@@ -127,7 +129,7 @@ export interface Lead {
   updated_at?: string | null
 }
 
-export type ReviewQueueKey = 'drafted' | 'needs_email' | 'send_failed' | 'high_intent'
+export type ReviewQueueKey = 'drafted' | 'needs_email' | 'needs_research' | 'send_failed' | 'high_intent'
 
 export interface ReviewCenterData {
   counts: Record<ReviewQueueKey, number>
@@ -351,6 +353,10 @@ export interface LeadBrief {
   specific_products?: string | null
   recent_activity?: string | null
   personalization_hook?: string | null
+  research_status: string
+  quality_flags?: string[] | null
+  evidence_sources?: Array<{ type: string; value: string }> | null
+  researched_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -459,6 +465,34 @@ export interface WorkflowHealth {
     sender_accounts: number
     email_require_verified: boolean
     auto_send_drafts: boolean
+    snovio_required: boolean
+  }
+  automation: {
+    workflow_state: string
+    search_state: string
+    search_pause_reason: string | null
+    send_state: string
+    send_pause_reason: string | null
+  }
+  quality: { research_valid: number; needs_research: number; content_blocked: number }
+  delivery: {
+    initial_sent: number
+    followups_sent: number
+    positive_replies: number
+    bounces: number
+    unsubscribes: number
+  }
+  acquisition: { never_contacted: number; usable: number; blocked: number }
+  provider_roi: {
+    provider: string
+    search_calls: number
+    contacts_returned: number
+    candidates_accepted: number
+    email_lookups: number
+    valid_emails: number
+    estimated_credits: number
+    initial_sent: number
+    positive_replies: number
   }
   warnings: string[]
 }

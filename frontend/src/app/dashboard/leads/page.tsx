@@ -19,8 +19,27 @@ import {
 const PAGE_SIZE = 50;
 
 const STATUS_OPTIONS = [
-  'found', 'needs_email', 'drafted', 'sent', 'send_failed', 'replied', 'rejected', 'unsubscribed',
+  'found', 'needs_email', 'needs_research', 'low_score', 'invalid_email', 'drafted',
+  'sent', 'send_failed', 'replied', 'bounced', 'rejected', 'unsubscribed',
 ];
+
+const RESEARCH_STATUS_OPTIONS = [
+  ['valid', 'Research verified'],
+  ['insufficient', 'Research needs verification'],
+  ['missing', 'Research missing'],
+] as const;
+
+const EMAIL_STATUS_OPTIONS = [
+  ['valid', 'Email valid'],
+  ['unknown', 'Email MX only / unknown'],
+  ['invalid', 'Email invalid'],
+  ['no_email', 'No email'],
+] as const;
+
+const CONTACT_HISTORY_OPTIONS = [
+  ['never_contacted', 'Never contacted'],
+  ['contacted', 'Previously contacted'],
+] as const;
 
 function statusClasses(status: string): string {
   switch (status) {
@@ -44,6 +63,21 @@ function gradeClasses(grade?: string | null): string {
   }
 }
 
+function researchStatusClasses(status?: string | null): string {
+  return status === 'valid'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : 'border-amber-200 bg-amber-50 text-amber-800';
+}
+
+function evidenceHref(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function LeadsPage() {
   const { t } = useTranslation();
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -56,6 +90,9 @@ export default function LeadsPage() {
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [status, setStatus] = useState('');
+  const [researchStatus, setResearchStatus] = useState('');
+  const [emailStatus, setEmailStatus] = useState('');
+  const [contactHistory, setContactHistory] = useState('');
   const [workflowId, setWorkflowId] = useState<string>('');
 
   const [ratingId, setRatingId] = useState<number | null>(null);
@@ -79,6 +116,9 @@ export default function LeadsPage() {
       params.set('skip', String(page * PAGE_SIZE));
       params.set('limit', String(PAGE_SIZE));
       if (status) params.set('status', status);
+      if (researchStatus) params.set('research_status', researchStatus);
+      if (emailStatus) params.set('email_status', emailStatus);
+      if (contactHistory) params.set('contact_history', contactHistory);
       if (workflowId) params.set('workflow_id', workflowId);
       if (search.trim()) params.set('search', search.trim());
       const res = await apiFetch(`/api/leads?${params.toString()}`);
@@ -95,13 +135,13 @@ export default function LeadsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [page, status, workflowId, search, t]);
+  }, [page, status, researchStatus, emailStatus, contactHistory, workflowId, search, t]);
 
   useEffect(() => { fetchWorkflows(); }, [fetchWorkflows]);
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
   // Reset to first page whenever a filter changes.
-  useEffect(() => { setPage(0); }, [status, workflowId, search]);
+  useEffect(() => { setPage(0); }, [status, researchStatus, emailStatus, contactHistory, workflowId, search]);
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +152,9 @@ export default function LeadsPage() {
     setSearchInput('');
     setSearch('');
     setStatus('');
+    setResearchStatus('');
+    setEmailStatus('');
+    setContactHistory('');
     setWorkflowId('');
   };
 
@@ -153,7 +196,14 @@ export default function LeadsPage() {
     }
   };
 
-  const filtersActive = Boolean(search || status || workflowId);
+  const filtersActive = Boolean(search || status || researchStatus || emailStatus || contactHistory || workflowId);
+
+  const showDataReadyUncontacted = () => {
+    setStatus('');
+    setResearchStatus('valid');
+    setEmailStatus('valid');
+    setContactHistory('never_contacted');
+  };
 
   return (
     <div>
@@ -196,6 +246,36 @@ export default function LeadsPage() {
             <option value="">{t('All workflows')}</option>
             {workflows.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
+          <select
+            aria-label={t('Research status')}
+            value={researchStatus}
+            onChange={(e) => setResearchStatus(e.target.value)}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none focus-visible:border-indigo-400"
+          >
+            <option value="">{t('All research statuses')}</option>
+            {RESEARCH_STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+          </select>
+          <select
+            aria-label={t('Email status')}
+            value={emailStatus}
+            onChange={(e) => setEmailStatus(e.target.value)}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none focus-visible:border-indigo-400"
+          >
+            <option value="">{t('All email statuses')}</option>
+            {EMAIL_STATUS_OPTIONS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+          </select>
+          <select
+            aria-label={t('Contact history')}
+            value={contactHistory}
+            onChange={(e) => setContactHistory(e.target.value)}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none focus-visible:border-indigo-400"
+          >
+            <option value="">{t('All contact history')}</option>
+            {CONTACT_HISTORY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+          </select>
+          <Button type="button" variant="outline" size="sm" onClick={showDataReadyUncontacted} className="whitespace-nowrap bg-emerald-50 text-emerald-800 hover:bg-emerald-100">
+            <MailCheck className="h-3.5 w-3.5" />{t('Data-ready uncontacted')}
+          </Button>
           {filtersActive && (
             <Button variant="ghost" size="sm" onClick={clearFilters} className="gap-1 text-slate-500">
               <X className="h-3.5 w-3.5" /> {t('Clear')}
@@ -387,14 +467,48 @@ export default function LeadsPage() {
                 )}
 
                 <div>
-                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{t('AI research brief')}</p>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{t('Customer research dossier')}</p>
                   {briefLoading ? (
                     <div className="flex items-center gap-2 text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> {t('Loading...')}</div>
                   ) : brief ? (
-                    <div className="space-y-2 text-slate-700">
-                      {brief.company_overview && <p>{brief.company_overview}</p>}
-                      {brief.pain_points && <p><span className="text-slate-500">{t('Pain points')}: </span>{brief.pain_points}</p>}
-                      {brief.personalization_hook && <p><span className="text-slate-500">{t('Hook')}: </span>{brief.personalization_hook}</p>}
+                    <div className="space-y-4 text-slate-700">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className={cn('border', researchStatusClasses(brief.research_status))}>
+                          {brief.research_status === 'valid' ? t('Evidence verified') : t('Needs verification')}
+                        </Badge>
+                        {brief.researched_at ? <span className="text-xs text-slate-500">{t('Researched')} {new Date(brief.researched_at).toLocaleString()}</span> : null}
+                      </div>
+                      {brief.company_overview && <BriefSection label={t('Company overview')} value={brief.company_overview} />}
+                      {brief.specific_products && <BriefSection label={t('Specific products')} value={brief.specific_products} />}
+                      {brief.recent_news && <BriefSection label={t('Recent news')} value={brief.recent_news} />}
+                      {brief.recent_activity && brief.recent_activity !== brief.recent_news && <BriefSection label={t('Recent activity')} value={brief.recent_activity} />}
+                      {brief.pain_points && <BriefSection label={t('Pain points / qualification hypotheses')} value={brief.pain_points} />}
+                      {brief.value_proposition_alignment && <BriefSection label={t('Value proposition alignment')} value={brief.value_proposition_alignment} />}
+                      {brief.personalization_hook && <BriefSection label={t('Personalization hook')} value={brief.personalization_hook} />}
+                      {brief.quality_flags?.length ? (
+                        <div>
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{t('Quality flags')}</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {brief.quality_flags.map(flag => <span key={flag} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">{flag}</span>)}
+                          </div>
+                        </div>
+                      ) : null}
+                      {brief.evidence_sources?.length ? (
+                        <div>
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{t('Evidence sources')}</p>
+                          <ul className="space-y-2">
+                            {brief.evidence_sources.map((source, index) => {
+                              const href = evidenceHref(source.value);
+                              return (
+                                <li key={`${source.type}:${source.value}:${index}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                                  <span className="mr-2 font-semibold text-slate-600">{source.type}</span>
+                                  {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="break-all text-indigo-600 hover:underline">{source.value} <ExternalLink className="inline h-3 w-3" /></a> : <span className="break-all text-slate-600">{source.value}</span>}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
                     </div>
                   ) : (
                     <p className="text-slate-500">{t('No research brief for this lead yet.')}</p>
@@ -415,5 +529,14 @@ function Field({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-slate-500">{label}</p>
       <p className="truncate text-slate-700" title={value}>{value}</p>
     </div>
+  );
+}
+
+function BriefSection({ label, value }: { label: string; value: string }) {
+  return (
+    <section>
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="whitespace-pre-wrap leading-6 text-slate-700">{value}</p>
+    </section>
   );
 }

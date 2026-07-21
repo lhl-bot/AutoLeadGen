@@ -1,3 +1,8 @@
-#!/bin/bash
-source venv/bin/activate
-uvicorn main:app --reload --host 0.0.0.0 --port 8001 --env-file .env
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if (( $# == 0 )); then
+  set -- start
+fi
+exec "${ROOT_DIR}/scripts/dev.sh" "$@"

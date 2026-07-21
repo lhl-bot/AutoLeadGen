@@ -47,3 +47,22 @@ frontend/out/
 # Local demo (do not deploy)
 seed_local_demo.py
 local_demo.db
+
+# Historical/customer evidence is preserved outside the release worktree.
+backup_workflow18_scope.py
+migrate_v16.py
+prepare_workflow18_*.py
+verify_workflow18_*.py
+workflow18_*.md
+workflow18_*.json
+jysk_supplier_call_*.md
+product_logic_audit_*.ipynb
+product_logic_audit_*.json
+
+# Product V2 local-only runtime and test artifacts
+.local/
+coverage/
+htmlcov/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/

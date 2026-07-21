@@ -1,0 +1,43 @@
+{
+    admin off
+}
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    request_body {
+        max_size 10MB
+    }
+
+    @backend path /api/* /health /health/*
+    handle @backend {
+        reverse_proxy api:8001
+    }
+
+    handle {
+        reverse_proxy frontend:8888
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests"
+        Cross-Origin-Opener-Policy "same-origin"
+        X-Permitted-Cross-Domain-Policies "none"
+        -Server
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
+
+# Loopback-only liveness endpoint used by the container healthcheck. It does
+# not depend on public DNS/TLS and is not published by Compose.
+http://127.0.0.1:2019 {
+    respond /healthz 200
+}

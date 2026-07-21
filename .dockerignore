@@ -2,7 +2,27 @@ venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 .git/
 .DS_Store
 *.db
 *.log
+.local/
+.pytest_cache/
+frontend/
+tests/
+scratch/
+docs/
+test-results/
+*.ipynb
+
+# Historical/customer evidence must never enter a release image.
+backup_workflow18_scope.py
+migrate_v16.py
+prepare_workflow18_*.py
+verify_workflow18_*.py
+workflow18_*.md
+workflow18_*.json
+jysk_supplier_call_*.md
+product_logic_audit_*.json

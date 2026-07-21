@@ -1,0 +1,245 @@
+name: autoleadgen
+
+x-backend-environment: &backend-environment
+  AUTOLEADGEN_ENV: ${AUTOLEADGEN_ENV:?set AUTOLEADGEN_ENV}
+  AUTOLEADGEN_CONNECTOR_MODE: ${AUTOLEADGEN_CONNECTOR_MODE:-real}
+  ALLOW_REAL_EXTERNAL_CALLS: ${ALLOW_REAL_EXTERNAL_CALLS:-false}
+  ALLOW_REAL_ACQUISITION_CALLS: ${ALLOW_REAL_ACQUISITION_CALLS:-false}
+  OUTBOUND_HARD_PAUSE_FILE: /run/control/outbound_hard_pause
+  ACQUISITION_HARD_PAUSE_FILE: /run/control/acquisition_hard_pause
+  LINKEDIN_HARD_PAUSE_FILE: /run/control/linkedin_hard_pause
+  WHATSAPP_HARD_PAUSE_FILE: /run/control/whatsapp_hard_pause
+  ACQUISITION_OWNER_ALLOWLIST: ${ACQUISITION_OWNER_ALLOWLIST:-}
+  ACQUISITION_APPROVAL_ID: ${ACQUISITION_APPROVAL_ID:-}
+  ACQUISITION_DAILY_SEARCH_LIMIT: ${ACQUISITION_DAILY_SEARCH_LIMIT:-5}
+  ACQUISITION_DAILY_VERIFICATION_LIMIT: ${ACQUISITION_DAILY_VERIFICATION_LIMIT:-20}
+  ACQUISITION_PRICE_VERSION: ${ACQUISITION_PRICE_VERSION:-}
+  LINKEDIN_OWNER_ALLOWLIST: ${LINKEDIN_OWNER_ALLOWLIST:-}
+  LINKEDIN_APPROVAL_ID: ${LINKEDIN_APPROVAL_ID:-}
+  LINKEDIN_DAILY_ACCOUNT_LIMIT: ${LINKEDIN_DAILY_ACCOUNT_LIMIT:-5}
+  LINKEDIN_PRICE_VERSION: ${LINKEDIN_PRICE_VERSION:-}
+  WHATSAPP_OWNER_ALLOWLIST: ${WHATSAPP_OWNER_ALLOWLIST:-}
+  WHATSAPP_APPROVAL_ID: ${WHATSAPP_APPROVAL_ID:-}
+  WHATSAPP_DAILY_ACCOUNT_LIMIT: ${WHATSAPP_DAILY_ACCOUNT_LIMIT:-5}
+  WHATSAPP_PRICE_VERSION: ${WHATSAPP_PRICE_VERSION:-}
+  PRODUCT_V2_LEGACY_READ_ONLY: "true"
+  PRODUCT_V2_LEGACY_WRITERS_FROZEN: "true"
+  PRODUCT_V2_OWNER_PATH_ENFORCEMENT: "true"
+  PRODUCT_V2_ACCOUNT_BINDING_REQUIRED: "true"
+  PRODUCT_V2_WEBHOOK_REJECT_ALL_FILE: /run/control/webhook_reject_all
+  ENABLE_BACKGROUND_WORKERS: "false"
+  ENABLE_PROSPECTING_WORKER: "false"
+  ENABLE_INBOX_MONITOR_WORKER: "false"
+  HEALTH_REQUIRE_ALEMBIC_HEAD: "true"
+  DATABASE_URL_FILE: /run/secrets/database_url
+  JWT_SECRET_KEY_FILE: /run/secrets/jwt_secret
+  SMTP_ENCRYPTION_KEY_FILE: /run/secrets/smtp_encryption_key
+  UNSUBSCRIBE_TOKEN_SECRET_FILE: /run/secrets/unsubscribe_token_secret
+  PRODUCT_V2_WEBHOOK_SECRET_FILE: /run/secrets/product_v2_webhook_secret
+  CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?set ALLOWED_HOSTS}
+  RELEASE_SHA: ${RELEASE_SHA:?set RELEASE_SHA}
+  IMAGE_DIGEST: ${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST}
+  PRODUCTION_CHANGE_ID: ${PRODUCTION_CHANGE_ID:?set PRODUCTION_CHANGE_ID}
+  PRODUCT_V2_APPROVED_DATABASE_FINGERPRINT: ${PRODUCT_V2_APPROVED_DATABASE_FINGERPRINT:-}
+  PRODUCT_V2_PRODUCTION_MIGRATION_APPROVED: ${PRODUCT_V2_PRODUCTION_MIGRATION_APPROVED:-false}
+  PRODUCT_V2_LEGACY_BASELINE_STAMP_APPROVED: ${PRODUCT_V2_LEGACY_BASELINE_STAMP_APPROVED:-false}
+  PRODUCT_V2_PRODUCTION_BACKFILL_APPROVED: ${PRODUCT_V2_PRODUCTION_BACKFILL_APPROVED:-false}
+  PRODUCT_V2_PRODUCTION_AUTO_SEND_APPROVED: ${PRODUCT_V2_PRODUCTION_AUTO_SEND_APPROVED:-false}
+  PRODUCT_V2_AUTO_SEND_APPROVAL_ID: ${PRODUCT_V2_AUTO_SEND_APPROVAL_ID:-}
+  PRODUCT_V2_AUTO_SEND_OWNER_IDS: ${PRODUCT_V2_AUTO_SEND_OWNER_IDS:-}
+  PRODUCT_V2_AUTO_SEND_MAX_DAILY_PER_ACCOUNT: ${PRODUCT_V2_AUTO_SEND_MAX_DAILY_PER_ACCOUNT:-20}
+  PRODUCT_V2_BACKUP_RESTORE_EVIDENCE_ID: ${PRODUCT_V2_BACKUP_RESTORE_EVIDENCE_ID:?set PRODUCT_V2_BACKUP_RESTORE_EVIDENCE_ID}
+  PRODUCT_V2_MONITORING_EVIDENCE_ID: ${PRODUCT_V2_MONITORING_EVIDENCE_ID:?set PRODUCT_V2_MONITORING_EVIDENCE_ID}
+  PRODUCT_V2_STAGING_ACCEPTANCE_EVIDENCE_ID: ${PRODUCT_V2_STAGING_ACCEPTANCE_EVIDENCE_ID:?set PRODUCT_V2_STAGING_ACCEPTANCE_EVIDENCE_ID}
+  PRODUCT_V2_EMAIL_DNS_EVIDENCE_ID: ${PRODUCT_V2_EMAIL_DNS_EVIDENCE_ID:-}
+  PRODUCT_V2_COMPLIANCE_APPROVAL_ID: ${PRODUCT_V2_COMPLIANCE_APPROVAL_ID:-}
+  PRODUCT_V2_SHADOW_EVIDENCE_ID: ${PRODUCT_V2_SHADOW_EVIDENCE_ID:-}
+  BACKFILL_EVIDENCE_ROOT: /evidence
+  DB_POOL_RECYCLE_SECONDS: "900"
+  AUTH_USER_CACHE_TTL_SECONDS: "0"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "720"
+  SMTP_TIMEOUT_SECONDS: "20"
+  IMAP_TIMEOUT_SECONDS: "20"
+  IMAP_LOOKBACK_DAYS: "7"
+  IMAP_MAX_MESSAGES_PER_ACCOUNT: "200"
+  IMAP_MAX_MESSAGE_BYTES: "5242880"
+  EMAIL_ACCOUNT_PROBE_APPROVED: ${EMAIL_ACCOUNT_PROBE_APPROVED:-false}
+  EMAIL_ACCOUNT_PROBE_TIMEOUT_SECONDS: "20"
+
+x-backend-service: &backend-service
+  image: ${BACKEND_IMAGE:?set BACKEND_IMAGE}@${BACKEND_IMAGE_DIGEST:?set BACKEND_IMAGE_DIGEST}
+  pull_policy: always
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  stop_grace_period: 45s
+  environment: *backend-environment
+  secrets:
+    - database_url
+    - jwt_secret
+    - smtp_encryption_key
+    - unsubscribe_token_secret
+    - product_v2_webhook_secret
+  volumes:
+    - ${RUNTIME_CONTROL_DIR:?set RUNTIME_CONTROL_DIR}:/run/control:ro
+  networks: [backend, egress]
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  migrate:
+    <<: *backend-service
+    profiles: [operations]
+    restart: "no"
+    command: ["python", "scripts/production_migrate.py"]
+
+  preflight:
+    <<: *backend-service
+    profiles: [operations]
+    restart: "no"
+    command: ["python", "scripts/production_preflight.py", "--phase", "deploy"]
+
+  backfill:
+    <<: *backend-service
+    profiles: [operations]
+    restart: "no"
+    command: ["python", "scripts/production_backfill.py", "--dry-run"]
+    volumes:
+      - ${BACKFILL_EVIDENCE_DIR:?set BACKFILL_EVIDENCE_DIR}:/evidence
+      - ${RUNTIME_CONTROL_DIR:?set RUNTIME_CONTROL_DIR}:/run/control:ro
+
+  api:
+    <<: *backend-service
+    command: ["gunicorn", "main:app", "--worker-class", "uvicorn_worker.UvicornWorker", "--workers", "1", "--bind", "0.0.0.0:8001", "--forwarded-allow-ips", "*", "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5", "--max-requests", "2000", "--max-requests-jitter", "200", "--access-logfile", "-", "--error-logfile", "-"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "1.50", memory: 1536M}
+        reservations: {cpus: "0.25", memory: 384M}
+
+  outbound-worker:
+    <<: *backend-service
+    command: ["python", "-m", "product_v2.worker", "outbound", "--interval", "2"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "scripts/worker_healthcheck.py", "outbound"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "1.00", memory: 768M}
+        reservations: {cpus: "0.10", memory: 256M}
+
+  inbox-worker:
+    <<: *backend-service
+    command: ["python", "-m", "product_v2.worker", "inbox", "--interval", "30"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "scripts/worker_healthcheck.py", "inbox"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "0.75", memory: 768M}
+        reservations: {cpus: "0.10", memory: 256M}
+
+  frontend:
+    image: ${FRONTEND_IMAGE:?set FRONTEND_IMAGE}@${FRONTEND_IMAGE_DIGEST:?set FRONTEND_IMAGE_DIGEST}
+    pull_policy: always
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /app/.next/cache:size=128m,mode=0755,uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      BACKEND_URL: http://api:8001
+      DEPLOYMENT_VERSION: ${RELEASE_SHA:?set RELEASE_SHA}
+    networks: [backend]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8888/login',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits: {cpus: "1.00", memory: 768M}
+        reservations: {cpus: "0.10", memory: 256M}
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "5"}
+
+  gateway:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, backend]
+    depends_on:
+      frontend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document=-", "http://127.0.0.1:2019/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: {cpus: "0.50", memory: 256M}
+        reservations: {cpus: "0.05", memory: 64M}
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "5"}
+
+secrets:
+  database_url: {file: "${DATABASE_URL_SECRET_PATH:?set DATABASE_URL_SECRET_PATH}"}
+  jwt_secret: {file: "${JWT_SECRET_PATH:?set JWT_SECRET_PATH}"}
+  smtp_encryption_key: {file: "${SMTP_ENCRYPTION_KEY_SECRET_PATH:?set SMTP_ENCRYPTION_KEY_SECRET_PATH}"}
+  unsubscribe_token_secret: {file: "${UNSUBSCRIBE_TOKEN_SECRET_PATH:?set UNSUBSCRIBE_TOKEN_SECRET_PATH}"}
+  product_v2_webhook_secret: {file: "${WEBHOOK_SECRET_PATH:?set WEBHOOK_SECRET_PATH}"}
+
+networks:
+  edge: {}
+  egress: {}
+  backend:
+    internal: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

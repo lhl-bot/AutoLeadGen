@@ -1,0 +1,43 @@
+name: autoleadgen-product-v2
+
+services:
+  mysql:
+    image: mysql:8.4.10@sha256:c592c15aaf4a1961e15d82eb31ea5987dda862d1c4b1e93424438c0e91dc1f8d
+    pull_policy: missing
+    restart: "no"
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_DATABASE: autoleadgen_v2
+      MYSQL_USER: autoleadgen
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mysqladmin ping -h 127.0.0.1 -u root --password="$$(cat /run/secrets/mysql_root_password)" --silent
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    secrets:
+      - mysql_password
+      - mysql_root_password
+    volumes:
+      - product_v2_mysql_data:/var/lib/mysql
+    mem_limit: 1g
+    cpus: 1.5
+
+secrets:
+  mysql_password:
+    file: ./.local/secrets/mysql_password
+  mysql_root_password:
+    file: ./.local/secrets/mysql_root_password
+
+volumes:
+  product_v2_mysql_data:

@@ -1,0 +1,82 @@
+groups:
+  - name: autoleadgen-production
+    interval: 30s
+    rules:
+      - alert: AutoLeadGenMetricsCollectionFailed
+        expr: >-
+          autoleadgen_metrics_collection_success != 1
+          or absent(autoleadgen_metrics_collection_success)
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: AutoLeadGen cannot collect database safety metrics
+
+      - alert: AutoLeadGenHighApiErrorRate
+        expr: >-
+          sum(rate(autoleadgen_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(autoleadgen_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: AutoLeadGen API 5xx rate exceeds 5 percent
+
+      - alert: AutoLeadGenProviderStateUnknown
+        expr: >-
+          autoleadgen_outreach_attempts{status=~"sending|unknown"} > 0
+          or
+          autoleadgen_provider_cost_events{status=~"reserved|unknown"} > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: Provider send or cost state requires reconciliation
+
+      - alert: AutoLeadGenWorkerHeartbeatStale
+        expr: autoleadgen_worker_heartbeat_age_seconds{worker_type=~"outbound|inbox"} > 90
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: Product V2 real email worker heartbeat is stale
+
+      - alert: AutoLeadGenEnabledAccountUnhealthy
+        expr: autoleadgen_unhealthy_enabled_channel_accounts > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: An enabled outbound account is not healthy
+
+      - alert: AutoLeadGenBounceRateHardStop
+        expr: >-
+          (
+            increase(autoleadgen_message_events_total{event_type="bounced"}[1h])
+            /
+            clamp_min(increase(autoleadgen_message_events_total{event_type="sent"}[1h]), 1)
+          ) > 0.05
+          and
+          increase(autoleadgen_message_events_total{event_type="sent"}[1h]) >= 20
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: One-hour bounce rate exceeds the five-percent hard-stop threshold
+
+      - alert: AutoLeadGenUnsubscribeRateHardStop
+        expr: >-
+          (
+            increase(autoleadgen_message_events_total{event_type="unsubscribed"}[1h])
+            /
+            clamp_min(increase(autoleadgen_message_events_total{event_type="sent"}[1h]), 1)
+          ) > 0.02
+          and
+          increase(autoleadgen_message_events_total{event_type="sent"}[1h]) >= 20
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: One-hour unsubscribe rate exceeds the two-percent hard-stop threshold
+
+      - alert: AutoLeadGenProviderComplaintHardStop
+        expr: increase(autoleadgen_message_events_total{event_type="complained"}[5m]) > 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: A Provider abuse complaint created a sender-account safety lock

@@ -8,6 +8,7 @@ email; step index 1 is round 2, sent ``day_offset`` days after round 1; etc.
 When a workflow has no sequence configured, callers fall back to the legacy
 behaviour: ``max_followups`` rounds spaced by a single global interval.
 """
+from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
 MAX_STEPS = 6
@@ -75,3 +76,25 @@ def interval_hours_for_round(raw: Any, followup_round: int, default_hours: float
 def instruction_for_round(raw: Any, followup_round: int) -> Optional[str]:
     step = step_for_round(raw, followup_round)
     return step["instruction"] if step else None
+
+
+def due_at_for_round(
+    last_sent_at: datetime,
+    raw: Any,
+    followup_round: int,
+    default_hours: float,
+    *,
+    use_business_days: bool = True,
+) -> datetime:
+    """Return the earliest follow-up time, optionally counting weekdays only."""
+    step = step_for_round(raw, followup_round)
+    if not step or not use_business_days:
+        return last_sent_at + timedelta(hours=interval_hours_for_round(raw, followup_round, default_hours))
+
+    remaining = int(step["day_offset"])
+    due_at = last_sent_at
+    while remaining > 0:
+        due_at += timedelta(days=1)
+        if due_at.weekday() < 5:
+            remaining -= 1
+    return due_at

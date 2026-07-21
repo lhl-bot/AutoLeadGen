@@ -1,47 +1,109 @@
+import hmac
 import os
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from passlib.context import CryptContext
-from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+import jwt
+from jwt.exceptions import InvalidTokenError
+from pwdlib import PasswordHash
+from pwdlib.exceptions import UnknownHashError
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 
 from database import get_db
 import models
+from runtime_config import is_production_like, read_int, read_secret
 
 # ─── Config ───
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("JWT_SECRET_KEY must be set in .env")
+SECRET_KEY = read_secret("JWT_SECRET_KEY", required=True)
+if is_production_like() and len(SECRET_KEY.encode("utf-8")) < 32:
+    raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = read_int(
+    "ACCESS_TOKEN_EXPIRE_MINUTES",
+    default=720 if is_production_like() else 7 * 24 * 60,
+    minimum=5,
+    maximum=7 * 24 * 60,
+)
+AUTH_SESSION_COOKIE = "autoleadgen_session"
+AUTH_CSRF_COOKIE = "autoleadgen_csrf"
+AUTH_CSRF_HEADER = "X-CSRF-Token"
 # Disabled by default so account disable/delete takes effect across all app workers.
 # Single-process deployments may explicitly opt in to a short TTL.
 AUTH_USER_CACHE_TTL_SECONDS = float(os.environ.get("AUTH_USER_CACHE_TTL_SECONDS", "0"))
 _auth_user_cache: dict[int, tuple[float, dict]] = {}
 
 # ─── Password Hashing ───
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# New passwords use Argon2. Bcrypt remains verification-only compatibility for
+# existing accounts and can be upgraded at a later authenticated write.
+password_hash = PasswordHash((Argon2Hasher(), BcryptHasher()))
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return password_hash.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return password_hash.verify(plain_password, hashed_password)
+    except (UnknownHashError, ValueError):
+        return False
 
 # ─── JWT Token ───
 def create_access_token(user_id: int, is_admin: bool = False) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user_id),
         "admin": is_admin,
         "exp": expire
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def set_auth_cookies(response: Response, token: str) -> None:
+    """Issue a first-party browser session without exposing it to JavaScript."""
+    max_age = ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    secure = is_production_like()
+    response.set_cookie(
+        AUTH_SESSION_COOKIE,
+        token,
+        max_age=max_age,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        path="/",
+    )
+    response.set_cookie(
+        AUTH_CSRF_COOKIE,
+        secrets.token_urlsafe(32),
+        max_age=max_age,
+        httponly=False,
+        secure=secure,
+        samesite="strict",
+        path="/",
+    )
+
+
+def clear_auth_cookies(response: Response) -> None:
+    secure = is_production_like()
+    response.delete_cookie(
+        AUTH_SESSION_COOKIE,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        path="/",
+    )
+    response.delete_cookie(
+        AUTH_CSRF_COOKIE,
+        httponly=False,
+        secure=secure,
+        samesite="strict",
+        path="/",
+    )
 
 
 def cache_auth_user(user: models.User, credit_balance: Optional[int] = None) -> None:
@@ -89,22 +151,37 @@ def _cached_user(user_id: int) -> Optional[models.User]:
 security = HTTPBearer(auto_error=False)
 
 def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db)
 ) -> models.User:
-    """Extract and validate JWT token from Authorization header, return User object."""
-    if not credentials:
+    """Validate Bearer clients or the first-party HttpOnly browser session."""
+    token = credentials.credentials if credentials else request.cookies.get(AUTH_SESSION_COOKIE)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录，请先登录",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    token = credentials.credentials
+    if not credentials and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        expected_csrf = request.cookies.get(AUTH_CSRF_COOKIE, "")
+        presented_csrf = request.headers.get(AUTH_CSRF_HEADER, "")
+        if not expected_csrf or not presented_csrf or not hmac.compare_digest(
+            expected_csrf,
+            presented_csrf,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "CSRF_CHECK_FAILED",
+                    "message": "Session request failed CSRF validation",
+                },
+            )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = int(payload.get("sub"))
-    except (JWTError, ValueError, TypeError):
+    except (InvalidTokenError, ValueError, TypeError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token 无效或已过期，请重新登录",
@@ -153,9 +230,21 @@ _smtp_cipher: Optional[Fernet] = None
 def _get_smtp_cipher() -> Fernet:
     global _smtp_cipher
     if _smtp_cipher is None:
-        key = os.environ.get("SMTP_ENCRYPTION_KEY")
+        key = read_secret("SMTP_ENCRYPTION_KEY")
         if not key:
-            key = os.environ.get("JWT_SECRET_KEY", "fallback-smtp-key")
+            if is_production_like():
+                raise RuntimeError(
+                    "SMTP_ENCRYPTION_KEY or SMTP_ENCRYPTION_KEY_FILE is required "
+                    "in staging and production"
+                )
+            # Preserve compatibility with existing local encrypted credentials.
+            key = SECRET_KEY
+        if is_production_like() and key == SECRET_KEY:
+            raise RuntimeError(
+                "SMTP_ENCRYPTION_KEY must be independent from JWT_SECRET_KEY"
+            )
+        if is_production_like() and len(key.encode("utf-8")) < 32:
+            raise RuntimeError("SMTP_ENCRYPTION_KEY must contain at least 32 bytes")
         key_bytes = key.encode("utf-8")
         if len(key_bytes) < 32:
             key_bytes = key_bytes.ljust(32, b"0")
@@ -173,5 +262,8 @@ def decrypt_smtp_pass(ciphertext: str) -> str:
     try:
         return _get_smtp_cipher().decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except InvalidToken:
-        # Plaintext password — encrypt it for future use (best-effort)
+        if is_production_like():
+            raise RuntimeError("Stored SMTP credential cannot be decrypted")
+        # Local compatibility only; production never treats an undecryptable
+        # database value as plaintext credentials.
         return ciphertext

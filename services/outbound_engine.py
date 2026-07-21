@@ -21,14 +21,18 @@ from services.email_preflight import (
     VERIFIED_EMAIL_STATUSES,
     is_email_good_for_lead,
     is_lead_sendable_now,
+    quality_gate_reason,
     temporary_send_block_reason,
     validate_lead_before_send,
 )
-from services.lead_scoring import apply_lead_score, build_outreach_context
+from services.lead_scoring import apply_lead_score, build_outreach_context, role_matches_target
 from services.send_results import record_send_failure, record_send_success
 from services.sender_accounts import select_sender_account
 from services.email_threads import extract_message_ids
 from services.suppression import generate_unsubscribe_token, suppression_reason
+from services.research_quality import outbound_content_quality_reason, utcnow
+from services.research_quality import is_usable_company_domain
+from services.provider_usage import safe_record_provider_usage
 
 # ─── Global Snovio Client ───
 import os
@@ -136,46 +140,54 @@ def _utc_day_start() -> datetime:
 
 def _workflow_search_counts(wf_id: int, db) -> Dict[str, int]:
     statuses_in_pipeline = ["found", "drafted"]
-    statuses_with_contact = ["found", "drafted", "sent", "send_failed"]
+    statuses_with_contact = ["found", "drafted"]
     statuses_from_search = [
         "found",
         "drafted",
         "sent",
         "send_failed",
         "needs_email",
+        "needs_research",
         "invalid_email",
         "bounced",
         "low_score",
     ]
     verified_statuses = list(VERIFIED_EMAIL_STATUSES)
+    never_contacted = ~Lead.email_logs.any(EmailLog.direction == "outbound")
 
     pipeline_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
+        never_contacted,
         Lead.status.in_(statuses_in_pipeline),
     ).count()
     contactable_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
+        never_contacted,
         Lead.status.in_(statuses_with_contact),
         Lead.email.isnot(None),
         Lead.email != "",
     ).count()
     usable_email_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
+        never_contacted,
         Lead.email.isnot(None),
         Lead.email != "",
         Lead.email_validation_status.in_(verified_statuses),
     ).count()
     total_search_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
+        never_contacted,
         Lead.status.in_(statuses_from_search),
     ).count()
     needs_email_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
+        never_contacted,
         Lead.status == "needs_email",
     ).count()
     blocked_count = db.query(Lead).filter(
         Lead.workflow_id == wf_id,
-        Lead.status.in_(["needs_email", "invalid_email", "bounced", "low_score"]),
+        never_contacted,
+        Lead.status.in_(["needs_email", "needs_research", "invalid_email", "low_score"]),
     ).count()
 
     return {
@@ -408,19 +420,37 @@ def _add_company_only_lead(
 
 
 def _mark_lead_suppressed(lead: Lead, reason: str, db) -> None:
-    if reason == "missing_email":
-        lead.status = "needs_email"
-    elif reason and reason.startswith("fit_score_too_low"):
-        lead.status = "low_score"
-    elif reason and reason.startswith("email_not_verified"):
-        lead.status = "needs_email"  # Can re-verify later
-    elif reason and reason.startswith("suppressed:"):
+    has_outbound = db.query(EmailLog.id).filter(
+        EmailLog.lead_id == lead.id,
+        EmailLog.direction == "outbound",
+    ).first() is not None
+    lead.automation_block_reason = reason
+    lead.automation_blocked_at = utcnow()
+    if reason and reason.startswith("suppressed:"):
         lead.status = "unsubscribed"
     elif reason in {"lead_status_unsubscribed", "lead_status_rejected"}:
         lead.status = reason.replace("lead_status_", "")
-    else:
-        lead.status = "invalid_email"
-    lead.reply_snippet = f"Suppressed before sending: {reason}"
+    elif not has_outbound:
+        if reason == "missing_email" or (reason and reason.startswith("email_not_verified")):
+            lead.status = "needs_email"
+        elif reason and reason.startswith("research_not_valid"):
+            lead.status = "needs_research"
+        elif reason and reason.startswith("fit_score_too_low"):
+            lead.status = "low_score"
+        else:
+            lead.status = "invalid_email"
+    db.commit()
+
+
+def _mark_automation_blocked(lead: Lead, reason: str, db, *, needs_research: bool = False) -> None:
+    has_outbound = db.query(EmailLog.id).filter(
+        EmailLog.lead_id == lead.id,
+        EmailLog.direction == "outbound",
+    ).first() is not None
+    lead.automation_block_reason = reason
+    lead.automation_blocked_at = utcnow()
+    if needs_research and not has_outbound:
+        lead.status = "needs_research"
     db.commit()
 
 
@@ -604,7 +634,9 @@ async def process_workflow(wf_id: int):
         db = SessionLocal()
         try:
             drafted_leads = []
-            auto_send_drafts = _bool_env("OUTBOUND_AUTO_SEND_DRAFTS", False)
+            auto_send_drafts = _bool_env("OUTBOUND_AUTO_SEND_DRAFTS", False) and not bool(
+                getattr(wf, "email_sending_paused", False)
+            )
             if not auto_send_drafts:
                 logger.info(f"Workflow #{wf_id} '{wf_name}' is in review mode; drafted emails will not auto-send.")
             if auto_send_drafts and not email_limit_reached:
@@ -652,7 +684,13 @@ async def process_workflow(wf_id: int):
                 
                 if can_send:
                     # Temporary reasons that shouldn't suppress a lead
-                    _TEMP_REASONS = {"outside_working_hours", "domain_cooldown"}
+                    _TEMP_REASONS = {
+                        "outside_working_hours",
+                        "outside_working_days",
+                        "recipient_timezone_unknown",
+                        "recipient_timezone_invalid",
+                        "domain_cooldown",
+                    }
                     for candidate in drafted_leads:
                         is_sendable, reason = is_lead_sendable_now(candidate, db)
                         if is_sendable:
@@ -710,12 +748,23 @@ async def process_workflow(wf_id: int):
                 Lead.workflow_id == wf_id,
                 Lead.status == "found"
             ).limit(5).all()
-            lead_infos = [(lead.id, lead.domain, lead.company_name, lead.job_title, lead.email, lead.first_name, lead.last_name, lead.linkedin_url, lead.whatsapp_number) for lead in found_leads]
+            lead_infos = [(
+                lead.id,
+                lead.domain,
+                lead.company_name,
+                lead.job_title,
+                lead.email,
+                lead.first_name,
+                lead.last_name,
+                lead.linkedin_url,
+                lead.whatsapp_number,
+                lead.data_sources,
+            ) for lead in found_leads]
         finally:
             db.close()
         
         if lead_infos:
-            async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name, linkedin_url, whatsapp_number):
+            async def process_single_lead(lead_id, domain, company_name, job_title, email, first_name, last_name, linkedin_url, whatsapp_number, data_sources):
                 credit_charged = False
                 try:
                     # 0. Try LeadContact email enrichment if no email or unverified.
@@ -724,7 +773,10 @@ async def process_workflow(wf_id: int):
                     has_usable_email = bool(email and email.strip())
                     require_relevance = _bool_env("LEADCONTACT_ENRICH_REQUIRE_RELEVANCE", True)
                     worth_lookup = (not require_relevance) or _lead_worth_email_lookup(
-                        company_name, job_title, email_lookup_tokens
+                        company_name,
+                        job_title,
+                        email_lookup_tokens,
+                        relevance_verified="company_relevance_verified" in (data_sources or ""),
                     )
                     _prescore = None  # cheap rule-based fit score, computed lazily; shared by email+phone gates
 
@@ -739,8 +791,9 @@ async def process_workflow(wf_id: int):
                                 lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
                                 if lead_lc:
                                     lead_lc.email = reused
-                                    if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in reused:
-                                        lead_lc.domain = reused.split("@")[-1]
+                                    reused_domain = reused.split("@")[-1] if "@" in reused else ""
+                                    if (not lead_lc.domain or not lead_lc.domain.strip()) and is_usable_company_domain(reused_domain):
+                                        lead_lc.domain = reused_domain
                                         domain = lead_lc.domain
                                     lead_lc.data_sources = (lead_lc.data_sources or "") + ",reuse"
                                     db_lc.commit()
@@ -775,6 +828,15 @@ async def process_workflow(wf_id: int):
                                 lc = LeadContactClient(_lc_key)
                                 lc_result = lc.query_email_with_validation(linkedin_url)
                                 lc_email = lc_result.get("email")
+                                safe_record_provider_usage(
+                                    provider="leadcontact",
+                                    operation="email_lookup",
+                                    status="valid" if lc_email and lc_result.get("valid") else "found" if lc_email else "miss",
+                                    workflow_id=wf_id,
+                                    lead_id=lead_id,
+                                    estimated_credits=10,
+                                    result_count=1 if lc_email else 0,
+                                )
                                 if lc_email:
                                     _lc_budget_record(wf_id, "email")  # count only billed hits
                                     email = lc_email
@@ -784,8 +846,9 @@ async def process_workflow(wf_id: int):
                                         lead_lc = db_lc.query(Lead).filter(Lead.id == lead_id).first()
                                         if lead_lc:
                                             lead_lc.email = lc_email
-                                            if (not lead_lc.domain or not lead_lc.domain.strip()) and "@" in lc_email:
-                                                lead_lc.domain = lc_email.split("@")[-1]
+                                            lc_domain = lc_email.split("@")[-1] if "@" in lc_email else ""
+                                            if (not lead_lc.domain or not lead_lc.domain.strip()) and is_usable_company_domain(lc_domain):
+                                                lead_lc.domain = lc_domain
                                                 domain = lead_lc.domain
                                             lead_lc.email_validation_status = "valid" if lc_result.get("valid") else "catch-all"
                                             lead_lc.email_verified = bool(lc_result.get("valid"))
@@ -843,7 +906,10 @@ async def process_workflow(wf_id: int):
                         try:
                             lead_ne = db_ne.query(Lead).filter(Lead.id == lead_id).first()
                             if lead_ne:
-                                lead_ne.status = "needs_email"
+                                lead_ne.status = "needs_email" if worth_lookup else "needs_research"
+                                if not worth_lookup:
+                                    lead_ne.automation_block_reason = "company_relevance_not_verified"
+                                    lead_ne.automation_blocked_at = utcnow()
                                 if not lead_ne.email_validation_status:
                                     lead_ne.email_validation_status = "no_email"
                                 db_ne.commit()
@@ -876,8 +942,42 @@ async def process_workflow(wf_id: int):
                         finally:
                             db_v.close()
 
-                    # 0.3. Template mode: if the workflow uses an email template (A/B group),
-                    # render a variant directly — no research brief or AI credit needed.
+                    # 0.3. Research is mandatory for both template and AI modes.  A
+                    # template must not become a route around the quality gate.
+                    research_ok = await build_and_save_lead_brief(lead_id, domain)
+                    if not research_ok:
+                        db_rq = SessionLocal()
+                        try:
+                            lead_rq = db_rq.query(Lead).filter(Lead.id == lead_id).first()
+                            if lead_rq:
+                                _mark_automation_blocked(
+                                    lead_rq,
+                                    "research_not_valid",
+                                    db_rq,
+                                    needs_research=True,
+                                )
+                        finally:
+                            db_rq.close()
+                        logger.info("Lead %s moved to research review; no draft generated", lead_id)
+                        return
+
+                    if not role_matches_target(job_title, wf):
+                        db_role = SessionLocal()
+                        try:
+                            lead_role = db_role.query(Lead).filter(Lead.id == lead_id).first()
+                            if lead_role:
+                                _mark_automation_blocked(
+                                    lead_role,
+                                    "role_not_verified",
+                                    db_role,
+                                    needs_research=True,
+                                )
+                        finally:
+                            db_role.close()
+                        logger.info("Lead %s moved to review because target role is not verified", lead_id)
+                        return
+
+                    # 0.4. Template mode: render only after valid research exists.
                     if wf_template_id:
                         template_used = False
                         db_tpl = SessionLocal()
@@ -902,24 +1002,34 @@ async def process_workflow(wf_id: int):
                                     rendered = render_template(chosen, lead_obj)
                                     subject = rendered["subject"].strip()
                                     body = rendered["body"].strip()
-                                    lead_obj.ai_draft = f"Subject: {subject}\n\n{body}" if subject else body
-                                    lead_obj.status = "drafted"
-                                    lead_obj.template_id = chosen.id
-                                    lead_obj.template_variant = chosen.variant_label
-                                    db_tpl.commit()
-                                    template_used = True
-                                    logger.info(f"Template draft (variant {chosen.variant_label}) for {email} (workflow: {wf_name})")
+                                    rendered_draft = f"Subject: {subject}\n\n{body}" if subject else body
+                                    content_reason = outbound_content_quality_reason(rendered_draft)
+                                    if content_reason:
+                                        _mark_automation_blocked(
+                                            lead_obj,
+                                            content_reason,
+                                            db_tpl,
+                                            needs_research=True,
+                                        )
+                                        template_used = True
+                                    else:
+                                        lead_obj.ai_draft = rendered_draft
+                                        lead_obj.status = "drafted"
+                                        lead_obj.automation_block_reason = None
+                                        lead_obj.automation_blocked_at = None
+                                        lead_obj.template_id = chosen.id
+                                        lead_obj.template_variant = chosen.variant_label
+                                        db_tpl.commit()
+                                        template_used = True
+                                        logger.info(f"Template draft (variant {chosen.variant_label}) for {email} (workflow: {wf_name})")
                         finally:
                             db_tpl.close()
-                        # Template produced the draft → skip research + AI for this lead.
+                        # Template produced the draft → skip AI generation for this lead.
                         # If the template was missing/inactive, fall through to AI generation.
                         if template_used:
                             return
 
-                    # 1. Generate Deep Research Brief
-                    await build_and_save_lead_brief(lead_id, domain)
-                    
-                    # 2. Retrieve Brief from DB
+                    # 1. Retrieve the validated brief from DB
                     brief_summary = "No detailed brief available."
                     outreach_context = ""
                     db_b = SessionLocal()
@@ -951,14 +1061,24 @@ async def process_workflow(wf_id: int):
                             db_b.commit()
                             outreach_context = build_outreach_context(workflow_obj, persona_obj, score)
                             persona_id = workflow_obj.persona_id if workflow_obj else None
+                            if not role_matches_target(lead_obj.job_title, workflow_obj, persona_obj):
+                                _mark_automation_blocked(
+                                    lead_obj,
+                                    "role_not_verified",
+                                    db_b,
+                                    needs_research=True,
+                                )
+                                logger.info("Lead %s moved to review because target role is not verified", lead_id)
+                                return
                             # ── Score gate: skip drafting for low-fit leads ──
                             if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
                                 min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
-                                if score is not None and score < min_score:
+                                if score is not None and score.score < min_score:
                                     lead_obj.status = "low_score"
-                                    lead_obj.reply_snippet = f"Skipped: fit_score {score} < {min_score}"
+                                    lead_obj.automation_block_reason = f"fit_score_too_low({score.score}<{min_score})"
+                                    lead_obj.automation_blocked_at = utcnow()
                                     db_b.commit()
-                                    logger.info(f"Skipping draft for {email}: fit_score={score} < {min_score}")
+                                    logger.info(f"Skipping draft for {email}: fit_score={score.score} < {min_score}")
                                     return
                         else:
                             persona_id = None
@@ -1011,12 +1131,43 @@ async def process_workflow(wf_id: int):
                         few_shot_prompt=few_shot_prompt,
                     )
                     if draft:
+                        content_reason = outbound_content_quality_reason(draft)
+                        if content_reason:
+                            db_block = SessionLocal()
+                            try:
+                                lead_block = db_block.query(Lead).filter(Lead.id == lead_id).first()
+                                if lead_block:
+                                    _mark_automation_blocked(
+                                        lead_block,
+                                        content_reason,
+                                        db_block,
+                                        needs_research=True,
+                                    )
+                            finally:
+                                db_block.close()
+                            if credit_charged:
+                                db_refund = SessionLocal()
+                                try:
+                                    refund_credits(
+                                        db_refund,
+                                        wf_user_id,
+                                        "ai_email_draft",
+                                        description=f"Refund quality-blocked AI draft for lead #{lead_id}",
+                                        reference_type="lead",
+                                        reference_id=lead_id,
+                                    )
+                                    credit_charged = False
+                                finally:
+                                    db_refund.close()
+                            return
                         db2 = SessionLocal()
                         try:
                             lead_obj = db2.query(Lead).filter(Lead.id == lead_id).first()
                             if lead_obj:
                                 lead_obj.ai_draft = draft
                                 lead_obj.status = "drafted"
+                                lead_obj.automation_block_reason = None
+                                lead_obj.automation_blocked_at = None
                                 db2.commit()
                                 logger.info(f"Drafted email for {email} (workflow: {wf_name})")
                         finally:
@@ -1052,7 +1203,10 @@ async def process_workflow(wf_id: int):
                     logger.error(f"Error drafting for {email}: {e}")
 
             # Run all draft tasks concurrently
-            tasks = [process_single_lead(lid, d, cn, jt, e, fn, ln, li, wn) for lid, d, cn, jt, e, fn, ln, li, wn in lead_infos]
+            tasks = [
+                process_single_lead(lid, d, cn, jt, e, fn, ln, li, wn, ds)
+                for lid, d, cn, jt, e, fn, ln, li, wn, ds in lead_infos
+            ]
             await asyncio.gather(*tasks)
             return
 
@@ -1143,9 +1297,24 @@ async def process_workflow(wf_id: int):
                                 followup_round=followup_round,
                             )
                             if followup_draft:
+                                content_reason = outbound_content_quality_reason(followup_draft)
+                                if content_reason:
+                                    _mark_automation_blocked(lead_obj, content_reason, db2)
+                                    if credit_charged:
+                                        refund_credits(
+                                            db2,
+                                            wf_user_id,
+                                            "ai_email_draft",
+                                            description=f"Refund quality-blocked AI follow-up draft for lead #{lead_id}",
+                                            reference_type="lead",
+                                            reference_id=lead_id,
+                                        )
+                                        credit_charged = False
+                                    continue
                                 lead_obj.ai_draft = followup_draft
                                 lead_obj.status = "drafted"
-                                lead_obj.followup_count += 1
+                                lead_obj.automation_block_reason = None
+                                lead_obj.automation_blocked_at = None
                                 db2.commit()
                                 logger.info(f"Auto-followup drafted for {email} (round #{followup_round}, strategy: {'value' if followup_round==1 else 'social_proof' if followup_round==2 else 'urgency'})")
                                 return
@@ -1209,13 +1378,19 @@ async def process_workflow(wf_id: int):
                             continue
 
                         # Interval: configured per-step sequence if present, else the global env default.
-                        from services.followup_sequence import interval_hours_for_round, instruction_for_round
+                        from services.followup_sequence import due_at_for_round, instruction_for_round
                         default_interval_hours = float(os.environ.get("EMAIL_FOLLOWUP_INTERVAL_HOURS", 72))
                         next_round = current_followup_count + 1
-                        interval_hours = interval_hours_for_round(wf_followup_steps, next_round, default_interval_hours)
-                        elapsed_hours = (datetime.now(timezone.utc) - last_outbound.sent_at.replace(tzinfo=timezone.utc)).total_seconds() / 3600
+                        last_sent_at = last_outbound.sent_at.replace(tzinfo=timezone.utc)
+                        due_at = due_at_for_round(
+                            last_sent_at,
+                            wf_followup_steps,
+                            next_round,
+                            default_interval_hours,
+                            use_business_days=_bool_env("EMAIL_FOLLOWUP_USE_BUSINESS_DAYS", True),
+                        )
 
-                        if elapsed_hours >= interval_hours:
+                        if datetime.now(timezone.utc) >= due_at:
                             # Build conversation history from email_logs
                             conversation_history = []
                             email_logs = db2.query(EmailLog).filter(
@@ -1265,9 +1440,24 @@ async def process_workflow(wf_id: int):
                             )
 
                             if followup_draft:
+                                content_reason = outbound_content_quality_reason(followup_draft)
+                                if content_reason:
+                                    _mark_automation_blocked(lead_obj, content_reason, db2)
+                                    if credit_charged:
+                                        refund_credits(
+                                            db2,
+                                            wf_user_id,
+                                            "ai_email_draft",
+                                            description=f"Refund quality-blocked cold follow-up draft for lead #{lead_id}",
+                                            reference_type="lead",
+                                            reference_id=lead_id,
+                                        )
+                                        credit_charged = False
+                                    continue
                                 lead_obj.ai_draft = followup_draft
                                 lead_obj.status = "drafted"
-                                lead_obj.followup_count += 1
+                                lead_obj.automation_block_reason = None
+                                lead_obj.automation_blocked_at = None
                                 db2.commit()
                                 logger.info(f"Cold follow-up #{followup_round} drafted for {email} (workflow: {wf_name})")
                             elif credit_charged:
@@ -1407,15 +1597,16 @@ def _search_and_extract_leads(
             stats["status"] = "workflow_not_found"
             return stats
             
-        snovio = get_snovio_client()
+        snovio_enabled = _bool_env("SNOVIO_ENABLED", False)
+        snovio = get_snovio_client() if snovio_enabled else None
         if (
             not _bool_env("SEARCH_SAVE_COMPANIES_WITHOUT_EMAIL", True)
-            and not snovio._authenticate()
+            and (not snovio_enabled or not snovio or not snovio._authenticate())
         ):
-            stats["status"] = "snovio_unavailable"
-            stats["error"] = "Snov.io auth unavailable; web search cannot produce email-qualified leads"
+            stats["status"] = "email_enrichment_unavailable"
+            stats["error"] = "Company-only saving is disabled and Snov.io is intentionally disabled"
             logger.warning(
-                f"Snov.io unavailable for workflow #{wf_id}; skipping web/domain search "
+                f"Email enrichment unavailable for workflow #{wf_id}; skipping web/domain search "
                 "because company-only leads are disabled."
             )
             return stats
@@ -1503,6 +1694,24 @@ def _search_and_extract_leads(
             
         new_domains_processed += 1
         stats["domains_checked"] += 1
+
+        if not snovio_enabled:
+            db = SessionLocal()
+            try:
+                db.add(ProcessedDomain(workflow_id=wf_id, domain=domain))
+                if _add_company_only_lead(
+                    db,
+                    wf_id,
+                    pool_id,
+                    domain,
+                    source_channel=source_channel,
+                    data_sources=data_sources,
+                ):
+                    stats["company_only_leads"] += 1
+                db.commit()
+            finally:
+                db.close()
+            continue
 
         if _bool_env("SNOVIO_SKIP_DOMAINS_WITHOUT_EMAILS", True):
             available_email_count = snovio.get_domain_emails_count(domain)
@@ -1876,37 +2085,32 @@ def _prescore_lead(lead_id: int, wf_id: int) -> Optional[int]:
         db.close()
 
 
-def _lead_worth_email_lookup(company_name: Optional[str], job_title: Optional[str], target_tokens: List[str]) -> bool:
+def _lead_worth_email_lookup(
+    company_name: Optional[str],
+    job_title: Optional[str],
+    target_tokens: List[str],
+    *,
+    relevance_verified: bool = False,
+) -> bool:
     """Whether to spend a paid email lookup on this lead.
 
-    Errs toward NOT spending only when there is a clear off-target signal: a real
-    company name that matches none of the target tokens. Leads with no company
-    info are allowed (we can't judge), so we never silently drop ambiguous ones —
-    a skipped lead is simply kept as needs_email rather than enriched.
+    Ambiguous leads remain available for research review, but ambiguity is no
+    longer a reason to spend paid lookup credits.
     """
+    if relevance_verified:
+        return True
+    if not (company_name or "").strip():
+        return False
     if not target_tokens:
-        return True
+        return bool((job_title or "").strip())
     hay = f"{company_name or ''} {job_title or ''}".lower().strip()
-    if not hay:
-        return True
-    title = (job_title or "").lower()
     buyer_title_terms = {
-        "buyer",
-        "buying",
-        "purchasing",
-        "procurement",
-        "sourcing",
-        "category",
-        "merchandise",
-        "merchandising",
-        "einkauf",
-        "einkäuf",
-        "einkaeuf",
-        "beschaffung",
+        "owner", "founder", "ceo", "president", "director", "head", "buyer", "buying",
+        "purchasing", "procurement", "sourcing", "category", "merchandise", "merchandising",
+        "einkauf", "einkäuf", "einkaeuf", "beschaffung",
     }
-    if any(term in title for term in buyer_title_terms):
-        return True
-    return any(tok in hay for tok in target_tokens)
+    title = (job_title or "").lower()
+    return any(tok in hay for tok in target_tokens) and any(term in title for term in buyer_title_terms)
 
 
 def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[int] = None) -> Dict[str, Any]:
@@ -1996,6 +2200,14 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                 next_page_token=token,
             )
             emps = result.get("employees", []) if isinstance(result, dict) else []
+            safe_record_provider_usage(
+                provider="leadcontact",
+                operation="employee_search",
+                status="error" if isinstance(result, dict) and result.get("error") else "ok",
+                workflow_id=wf_id,
+                result_count=len(emps),
+                metadata={"query": attempt, "has_next_page": bool(result.get("nextPageToken")) if isinstance(result, dict) else False},
+            )
             if emps:
                 chosen = chosen or attempt
                 next_page = (result.get("nextPageToken") or "") if isinstance(result, dict) else ""
@@ -2029,6 +2241,7 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
         logger.info(f"[LeadContact] {len(employees)} employees via tier: {chosen}")
 
         new_leads = 0
+        rejected_leads = 0
         for emp in employees:
             emp_email = emp.get("email") or ""
             emp_name = (emp.get("fullName") or "").strip()
@@ -2039,9 +2252,15 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
             if not emp_email and not linkedin_url:
                 continue
 
-            domain = ""
-            if "@" in emp_email:
-                domain = emp_email.split("@")[-1]
+            from services.company_enrichment import resolve_employee_company
+
+            resolution = resolve_employee_company(
+                emp,
+                workflow_keywords=keywords,
+                product_focus=product_focus,
+                target_region=target_region,
+            )
+            domain = resolution.domain
 
             # Deduplicate by domain + company or LinkedIn URL
             db_check = SessionLocal()
@@ -2061,6 +2280,27 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
                     ).first()
                 if existing:
                     continue
+
+                company_cap = _int_env("LEADCONTACT_MAX_CONTACTS_PER_COMPANY", 2, 1, 20)
+                company_query = db_check.query(Lead).filter(Lead.workflow_id == wf_id)
+                if domain:
+                    company_query = company_query.filter(func.lower(Lead.domain) == domain.lower())
+                elif emp_company:
+                    company_query = company_query.filter(func.lower(Lead.company_name) == emp_company.lower())
+                else:
+                    rejected_leads += 1
+                    continue
+                if company_query.count() >= company_cap:
+                    rejected_leads += 1
+                    safe_record_provider_usage(
+                        provider="leadcontact",
+                        operation="candidate_filter",
+                        status="company_cap",
+                        workflow_id=wf_id,
+                        result_count=0,
+                        metadata={"company": emp_company, "domain": domain, "cap": company_cap},
+                    )
+                    continue
             finally:
                 db_check.close()
 
@@ -2071,30 +2311,55 @@ def _leadcontact_search_and_extract(wf_id: int, lc, batch_lead_limit: Optional[i
 
             db_insert = SessionLocal()
             try:
+                from services.timezone_resolver import guess_timezone_from_country, guess_timezone_from_domain
+
+                location = str(emp.get("country") or emp.get("location") or "").strip()
+                single_target_region = target_region if target_region and not re.search(r"[,;]", target_region) else ""
+                lead_timezone = (
+                    guess_timezone_from_country(location)
+                    or guess_timezone_from_domain(domain)
+                    or guess_timezone_from_country(single_target_region)
+                )
+                data_source_parts = ["leadcontact", resolution.source]
+                if resolution.relevance_verified:
+                    data_source_parts.append("company_relevance_verified")
                 lead = Lead(
                     workflow_id=wf_id,
                     client_pool_id=pool_id,
                     email=emp_email if emp_email else None,
                     first_name=first,
                     last_name=last,
-                    company_name=emp_company or domain,
-                    domain=domain,
+                    company_name=emp_company or domain or None,
+                    domain=domain or None,
                     job_title=emp_title,
                     linkedin_url=linkedin_url,
                     source_channel="leadcontact",
-                    data_sources="leadcontact",
+                    data_sources=",".join(filter(None, data_source_parts)),
                     email_validation_status="valid" if emp_email else None,
                     email_verified=bool(emp_email),
-                    status="found",
+                    timezone=lead_timezone,
+                    status="found" if domain and resolution.relevance_verified else "needs_research",
+                    automation_block_reason=None if domain and resolution.relevance_verified else "company_relevance_not_verified",
+                    automation_blocked_at=None if domain and resolution.relevance_verified else utcnow(),
                 )
                 db_insert.add(lead)
                 db_insert.commit()
                 new_leads += 1
+                safe_record_provider_usage(
+                    provider="leadcontact",
+                    operation="candidate_filter",
+                    status="accepted" if resolution.relevance_verified else "research_review",
+                    workflow_id=wf_id,
+                    lead_id=lead.id,
+                    result_count=1,
+                    metadata={"company": emp_company, "domain": domain, "source": resolution.source},
+                )
                 logger.info(f"[LeadContact] New lead: {emp_email or linkedin_url} @ {emp_company}")
             finally:
                 db_insert.close()
 
         stats["new_leads"] = new_leads
+        stats["rejected_leads"] = rejected_leads
         stats["next_page"] = bool(cursor_candidate)
         logger.info(f"[LeadContact] Added {new_leads} leads from LeadContact search")
 
@@ -2277,10 +2542,28 @@ def _has_recent_outbound(lead_id: int, db, window_seconds: int) -> bool:
     ).first() is not None
 
 
-async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool = True, raise_on_credit_error: bool = False):
+async def send_lead_email(
+    lead: Lead,
+    wf: Workflow,
+    db,
+    *,
+    charge_credits: bool = True,
+    raise_on_credit_error: bool = False,
+    manual_reviewed: bool = False,
+):
     credit_charged = False
     sent_successfully = False
     try:
+        if _bool_env("OUTBOUND_HARD_PAUSE", False):
+            return {"success": False, "message": "Sending paused: global_hard_pause"}
+
+        # A workflow pause is a hard safety gate. Human review may waive soft
+        # quality/timezone rules, but it must never turn a paused campaign into
+        # a live sender.
+        if getattr(wf, "email_sending_paused", False):
+            reason = getattr(wf, "email_pause_reason", None) or "workflow_email_paused"
+            return {"success": False, "message": f"Sending paused: {reason}"}
+
         bounce_pause_reason = _workflow_bounce_pause_reason(wf.id, db)
         if bounce_pause_reason:
             logger.warning(f"Email sending paused for workflow '{wf.name}': {bounce_pause_reason}")
@@ -2292,7 +2575,17 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             logger.warning(f"Suppressed email to {lead.email or lead.domain}: {preflight_reason}")
             return {"success": False, "message": f"Suppressed before sending: {preflight_reason}"}
 
-        temporary_reason = temporary_send_block_reason(lead, db)
+        quality_reason = quality_gate_reason(lead, db)
+        if quality_reason:
+            _mark_lead_suppressed(lead, quality_reason, db)
+            logger.warning(f"Quality-blocked email to {lead.email or lead.domain}: {quality_reason}")
+            return {"success": False, "message": f"Quality blocked: {quality_reason}"}
+
+        temporary_reason = temporary_send_block_reason(
+            lead,
+            db,
+            require_timezone=not manual_reviewed,
+        )
         if temporary_reason:
             logger.info(f"Skipping {lead.email}: {temporary_reason}")
             return {"success": False, "message": f"Skipped: {temporary_reason}"}
@@ -2315,7 +2608,7 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             EmailLog.direction == "outbound",
         ).order_by(EmailLog.sent_at.desc(), EmailLog.id.desc()).first()
         preferred_email = None
-        if last_outbound and (lead.followup_count > 0 or lead.has_replied):
+        if last_outbound:
             preferred_email = last_outbound.from_email
 
         per_account_daily_cap = _int_env("EMAIL_MAX_DAILY_PER_ACCOUNT", 15, 1, 500)
@@ -2349,6 +2642,12 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
         subject = prepared_email.subject
         body = prepared_email.body
 
+        content_reason = outbound_content_quality_reason(f"{subject}\n\n{body}")
+        if content_reason:
+            _mark_automation_blocked(lead, content_reason, db, needs_research=True)
+            logger.warning(f"Content-blocked email to {lead.email}: {content_reason}")
+            return {"success": False, "message": f"Content blocked: {content_reason}"}
+
         # Wrap in branded HTML template
         custom_sig = wf.email_signature if hasattr(wf, 'email_signature') and wf.email_signature else None
         unsubscribe_url = _unsubscribe_url_for_lead(lead)
@@ -2363,9 +2662,7 @@ async def send_lead_email(lead: Lead, wf: Workflow, db, *, charge_credits: bool 
             ).order_by(EmailLog.sent_at.desc(), EmailLog.id.desc()).first()
         inbound_message_id = last_inbound.message_id if last_inbound else None
         outbound_message_id = last_outbound.message_id if last_outbound else None
-        in_reply_to = inbound_message_id or (
-            outbound_message_id if lead.followup_count > 0 else None
-        )
+        in_reply_to = inbound_message_id or outbound_message_id
         reference_ids = extract_message_ids(outbound_message_id, inbound_message_id)
         references = " ".join(reference_ids) if reference_ids else None
 

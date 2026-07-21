@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from models import EmailLog, Lead
 from services.suppression import owner_id_for_lead, suppression_reason
+from services.research_quality import is_personal_email_domain
 
 
 EMAIL_RE = re.compile(r"^[A-Z0-9._%+\-']+@[A-Z0-9.\-]+\.[A-Z]{2,}$", re.IGNORECASE)
@@ -108,7 +109,7 @@ def validate_lead_before_send(lead: Lead, db: Optional[Session] = None) -> Optio
     return None
 
 
-def quality_gate_reason(lead: Lead) -> Optional[str]:
+def quality_gate_reason(lead: Lead, db: Optional[Session] = None) -> Optional[str]:
     min_score = _int_env("EMAIL_MIN_FIT_SCORE", 60, 0, 100)
     if _bool_env("EMAIL_REQUIRE_MIN_FIT_SCORE", False):
         score = getattr(lead, "fit_score", None)
@@ -119,6 +120,14 @@ def quality_gate_reason(lead: Lead) -> Optional[str]:
         v_status = getattr(lead, "email_validation_status", None)
         if v_status not in VERIFIED_EMAIL_STATUSES:
             return f"email_not_verified({v_status})"
+
+    if db is not None and _bool_env("EMAIL_REQUIRE_VALID_RESEARCH", True):
+        from models import LeadBrief
+
+        brief = db.query(LeadBrief).filter(LeadBrief.lead_id == lead.id).first()
+        status = getattr(brief, "research_status", None) if brief else None
+        if status != "valid":
+            return f"research_not_valid({status or 'missing'})"
     return None
 
 
@@ -127,20 +136,28 @@ def temporary_send_block_reason(
     db: Session,
     *,
     now: Optional[datetime] = None,
+    require_timezone: Optional[bool] = None,
 ) -> Optional[str]:
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=timezone.utc)
+
+    if require_timezone is None:
+        require_timezone = _bool_env("EMAIL_REQUIRE_RECIPIENT_TIMEZONE", True)
+    if not lead.timezone and require_timezone:
+        return "recipient_timezone_unknown"
 
     if lead.timezone:
         try:
             import pytz
             local_tz = pytz.timezone(lead.timezone)
             local_now = current_time.astimezone(local_tz)
+            if local_now.weekday() >= 5:
+                return "outside_working_days"
             if local_now.hour < 9 or local_now.hour >= 17:
                 return "outside_working_hours"
         except Exception:
-            pass
+            return "recipient_timezone_invalid"
 
     domain_cooldown_hours = _int_env("EMAIL_SAME_DOMAIN_COOLDOWN_HOURS", 24, 1, 168)
     if lead.domain:
@@ -165,7 +182,7 @@ def is_lead_sendable_now(lead: Lead, db: Session) -> tuple[bool, Optional[str]]:
     if preflight_reason:
         return False, preflight_reason
 
-    quality_reason = quality_gate_reason(lead)
+    quality_reason = quality_gate_reason(lead, db)
     if quality_reason:
         return False, quality_reason
 
@@ -197,5 +214,8 @@ def is_email_good_for_lead(email: str, domain: str) -> bool:
         candidate = (domain or "").lower().strip()
         if candidate and candidate_domain != candidate and not candidate_domain.endswith("." + candidate):
             return False
+
+    if is_personal_email_domain(domain):
+        return False
 
     return True

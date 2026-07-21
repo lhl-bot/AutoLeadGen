@@ -73,6 +73,8 @@ class Workflow(Base):
     auto_followup = Column(Boolean, default=False)
     max_followups = Column(Integer, default=3)
     followup_steps = Column(JSON, nullable=True, doc="Ordered cold follow-up sequence: [{day_offset, instruction?}]. Overrides max_followups + global interval when set.")
+    email_sending_paused = Column(Boolean, default=False, nullable=False)
+    email_pause_reason = Column(String(255), nullable=True)
     template_id = Column(Integer, ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True, doc="When set, cold drafts use this template (A/B group) instead of pure AI generation")
     search_offset = Column(Integer, default=0)
     
@@ -177,13 +179,15 @@ class Lead(Base):
     last_name = Column(String(255))
     job_title = Column(String(255))
     linkedin_url = Column(String(500))
-    status = Column(String(50), default="found") # found, drafted, sent, replied, bounced, rejected, unsubscribed, send_failed, invalid_email, needs_email, low_score
+    status = Column(String(50), default="found") # found, drafted, sent, replied, bounced, rejected, unsubscribed, send_failed, invalid_email, needs_email, needs_research, low_score
     ai_draft = Column(Text)
     send_fail_count = Column(Integer, default=0)
     
     followup_count = Column(Integer, default=0)
     last_reply_at = Column(DateTime, nullable=True)
     reply_snippet = Column(Text, nullable=True)
+    automation_block_reason = Column(String(255), nullable=True, index=True)
+    automation_blocked_at = Column(DateTime, nullable=True)
     # Durable reply milestone, independent of the mutable automation status.
     # A lead can move replied -> drafted -> sent while this remains true.
     has_replied = Column(Boolean, default=False, nullable=False, index=True)
@@ -392,6 +396,28 @@ class SnovioUsageEvent(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class ProviderUsageEvent(Base):
+    """Persistent provider-cost and conversion audit trail."""
+    __tablename__ = "provider_usage_events"
+    __table_args__ = (
+        Index("ix_provider_usage_provider_created", "provider", "created_at"),
+        Index("ix_provider_usage_workflow_created", "workflow_id", "created_at"),
+        Index("ix_provider_usage_operation_status", "operation", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    provider = Column(String(50), nullable=False, index=True)
+    operation = Column(String(100), nullable=False, index=True)
+    workflow_id = Column(Integer, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_id = Column(Integer, ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
+    status = Column(String(50), nullable=False, default="unknown")
+    units = Column(Integer, default=1, nullable=False)
+    estimated_credits = Column(Integer, nullable=True)
+    result_count = Column(Integer, default=0, nullable=False)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class LeadBrief(Base):
     __tablename__ = "lead_briefs"
     __table_args__ = (
@@ -407,6 +433,10 @@ class LeadBrief(Base):
     specific_products = Column(Text, nullable=True, doc="Specific product names extracted from company website")
     recent_activity = Column(Text, nullable=True, doc="Recent launches, events, or partnerships")
     personalization_hook = Column(Text, nullable=True, doc="Concrete detail for email personalization")
+    research_status = Column(String(30), default="pending", nullable=False, index=True)
+    quality_flags = Column(JSON, nullable=True)
+    evidence_sources = Column(JSON, nullable=True)
+    researched_at = Column(DateTime, nullable=True)
     
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

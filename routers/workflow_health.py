@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 import models
@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/workflows", tags=["workflow_health"])
 _FUNNEL_ORDER = ["found", "drafted", "sent", "replied"]
 _STUCK_REASONS = {
     "needs_email": "无可用邮箱(off-target 跳过 / 查无邮箱)",
+    "needs_research": "公司或产品信息待补齐",
     "low_score": "匹配度过低(fit 闸拦截)",
     "invalid_email": "邮箱无效",
     "send_failed": "发送失败",
@@ -129,31 +130,134 @@ def workflow_health(workflow_id: int, db: Session = Depends(get_db), user: model
         models.WorkflowEmail.workflow_id == workflow_id
     ).scalar()
     leadcontact_points = _leadcontact_remaining_points()
+    auto_send_configured = os.environ.get("OUTBOUND_AUTO_SEND_DRAFTS", "false").strip().lower() in {"1", "true", "yes", "on"}
     providers = {
         "leadcontact": _provider_status("leadcontact", "LEADCONTACT_API_KEY"),
         "leadcontact_remaining_points": leadcontact_points,
-        "snovio": _provider_status("snovio", "SNOVIO_CLIENT_ID", "SNOVIO_CLIENT_SECRET"),
+        "snovio": (
+            _provider_status("snovio", "SNOVIO_CLIENT_ID", "SNOVIO_CLIENT_SECRET")
+            if os.environ.get("SNOVIO_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+            else "disabled"
+        ),
         "tavily": _provider_status("tavily", "TAVILY_API_KEY"),
         "bocha": _provider_status("bocha", "BOCHA_API_KEY"),
         "sender_accounts": int(sender_accounts or 0),
         "email_require_verified": os.environ.get("EMAIL_REQUIRE_VERIFIED", "true").strip().lower() not in {"0", "false", "no", "off"},
-        "auto_send_drafts": os.environ.get("OUTBOUND_AUTO_SEND_DRAFTS", "false").strip().lower() in {"1", "true", "yes", "on"},
+        "auto_send_drafts": auto_send_configured and not bool(getattr(wf, "email_sending_paused", False)),
+        "snovio_required": False,
     }
+
+    # Acquisition health excludes every lead with actual outbound history.  A
+    # mutable lead status must not make an already-contacted lead look unworked.
+    never_contacted = ~models.Lead.email_logs.any(models.EmailLog.direction == "outbound")
+    acquisition_total = lead_q.filter(never_contacted).count()
+    acquisition_blocked = lead_q.filter(
+        never_contacted,
+        models.Lead.status.in_(("needs_email", "needs_research", "invalid_email", "low_score")),
+    ).count()
+    acquisition_usable = lead_q.filter(
+        never_contacted,
+        models.Lead.email.isnot(None),
+        models.Lead.email != "",
+        models.Lead.email_validation_status.in_(list(VERIFIED_EMAIL_STATUSES)),
+    ).count()
+
+    outbound_rows = (
+        db.query(models.EmailLog.lead_id, func.count(models.EmailLog.id))
+        .join(models.Lead, models.EmailLog.lead_id == models.Lead.id)
+        .filter(models.Lead.workflow_id == workflow_id, models.EmailLog.direction == "outbound")
+        .group_by(models.EmailLog.lead_id)
+        .all()
+    )
+    initial_sent = len(outbound_rows)
+    followups_sent = sum(max(0, int(count) - 1) for _, count in outbound_rows)
+    positive_replies = lead_q.filter(models.Lead.reply_intent.in_(("interested", "more_info"))).count()
+
+    research_valid = (
+        db.query(func.count(models.LeadBrief.id))
+        .join(models.Lead, models.LeadBrief.lead_id == models.Lead.id)
+        .filter(models.Lead.workflow_id == workflow_id, models.LeadBrief.research_status == "valid")
+        .scalar()
+    )
+    needs_research_count = lead_q.filter(or_(
+        models.Lead.status == "needs_research",
+        models.Lead.automation_block_reason.like("research%"),
+        models.Lead.automation_block_reason == "company_relevance_not_verified",
+        models.Lead.automation_block_reason == "role_not_verified",
+    )).count()
+    content_blocked = lead_q.filter(or_(
+        models.Lead.automation_block_reason.like("research_placeholder_in_content%"),
+        models.Lead.automation_block_reason.in_((
+            "unresolved_template_placeholder", "login_page_content", "empty_outbound_content",
+        )),
+    )).count()
+
+    from services.outbound_engine import _leadcontact_backoff_until, _workflow_search_stop_reason
+
+    search_pause_reason = _workflow_search_stop_reason(workflow_id, db)
+    if wf.status != "active":
+        search_state = "inactive"
+    elif _leadcontact_backoff_until.get(workflow_id, 0) > now.timestamp():
+        search_state = "backoff"
+    elif search_pause_reason:
+        search_state = "paused"
+    else:
+        search_state = "running"
+    send_paused = bool(getattr(wf, "email_sending_paused", False)) or not auto_send_configured
+    send_pause_reason = getattr(wf, "email_pause_reason", None) or ("review_mode" if not auto_send_configured else None)
+
+    provider_rows = (
+        db.query(
+            models.ProviderUsageEvent.operation,
+            models.ProviderUsageEvent.status,
+            func.count(models.ProviderUsageEvent.id),
+            func.coalesce(func.sum(models.ProviderUsageEvent.result_count), 0),
+            func.coalesce(func.sum(models.ProviderUsageEvent.estimated_credits), 0),
+        )
+        .filter(
+            models.ProviderUsageEvent.workflow_id == workflow_id,
+            models.ProviderUsageEvent.provider == "leadcontact",
+        )
+        .group_by(models.ProviderUsageEvent.operation, models.ProviderUsageEvent.status)
+        .all()
+    )
+    provider_roi = {
+        "provider": "leadcontact",
+        "search_calls": 0,
+        "contacts_returned": 0,
+        "candidates_accepted": 0,
+        "email_lookups": 0,
+        "valid_emails": 0,
+        "estimated_credits": 0,
+        "initial_sent": initial_sent,
+        "positive_replies": int(positive_replies or 0),
+    }
+    for operation, status, event_count, result_count, estimated_credits in provider_rows:
+        provider_roi["estimated_credits"] += int(estimated_credits or 0)
+        if operation == "employee_search":
+            provider_roi["search_calls"] += int(event_count or 0)
+            provider_roi["contacts_returned"] += int(result_count or 0)
+        elif operation == "candidate_filter" and status == "accepted":
+            provider_roi["candidates_accepted"] += int(result_count or 0)
+        elif operation == "email_lookup":
+            provider_roi["email_lookups"] += int(event_count or 0)
+            if status == "valid":
+                provider_roi["valid_emails"] += int(result_count or 0)
 
     # Lightweight warnings the user should act on.
     warnings = []
-    bad_count = needs_email + invalid_email + bounced + by_status.get("low_score", 0)
-    bad_ratio = bad_count / total if total else 0
+    bad_count = int(acquisition_blocked or 0)
+    bad_ratio = bad_count / acquisition_total if acquisition_total else 0
     if leadcontact_points == 0:
-        warnings.append("LeadContact 余额为 0:停止依赖 LeadContact，改用已有线索/Snov/搜索源")
+        warnings.append("LeadContact 余额为 0:停止付费补全，优先使用已有线索与已配置搜索源")
     if providers["sender_accounts"] == 0:
         warnings.append("未绑定发信邮箱:邮件无法发送")
     if with_email == 0 and total > 0:
-        warnings.append("所有线索都没有邮箱:检查邮箱补全(LeadContact/Snov)与相关性闸")
+        warnings.append("所有线索都没有邮箱:检查LeadContact补全与公司相关性闸")
     if with_email > 0 and usable_email == 0 and providers["email_require_verified"]:
         warnings.append("有邮箱但没有可验证邮箱:EMAIL_REQUIRE_VERIFIED 会阻止发送")
-    if total >= 50 and bad_ratio >= 0.8:
-        warnings.append(f"坏线索比例过高:{bad_count}/{total}，应先清理/补全而不是继续搜索")
+    if acquisition_total >= 50 and bad_ratio >= 0.8:
+        warnings.append(f"未联系获客池坏线索比例过高:{bad_count}/{acquisition_total}，应先清理/补全而不是继续搜索")
     if leadcontact_total and leadcontact_without_email / max(1, leadcontact_total) >= 0.5:
         warnings.append(f"LeadContact 无邮箱比例过高:{leadcontact_without_email}/{leadcontact_total}")
     if by_status.get("drafted", 0) > 0 and providers["auto_send_drafts"] is False:
@@ -185,4 +289,29 @@ def workflow_health(workflow_id: int, db: Session = Depends(get_db), user: model
         },
         "providers": providers,
         "warnings": warnings,
+        "automation": {
+            "workflow_state": wf.status,
+            "search_state": search_state,
+            "search_pause_reason": search_pause_reason,
+            "send_state": "paused" if send_paused else "running",
+            "send_pause_reason": send_pause_reason,
+        },
+        "quality": {
+            "research_valid": int(research_valid or 0),
+            "needs_research": int(needs_research_count or 0),
+            "content_blocked": int(content_blocked or 0),
+        },
+        "delivery": {
+            "initial_sent": int(initial_sent),
+            "followups_sent": int(followups_sent),
+            "positive_replies": int(positive_replies or 0),
+            "bounces": int(bounced or 0),
+            "unsubscribes": int(by_status.get("unsubscribed", 0)),
+        },
+        "acquisition": {
+            "never_contacted": int(acquisition_total or 0),
+            "usable": int(acquisition_usable or 0),
+            "blocked": int(acquisition_blocked or 0),
+        },
+        "provider_roi": provider_roi,
     }

@@ -27,6 +27,29 @@ class RateLimiter:
             self._buckets[key] = (window_start, count + 1)
             return True
 
+    def is_blocked(self, key: str) -> bool:
+        """Check a bucket without charging successful requests against it."""
+        now = time.time()
+        with self._lock:
+            window_start, count = self._buckets.get(key, (0, 0))
+            if now - window_start > self.window_seconds:
+                self._buckets.pop(key, None)
+                return False
+            return count >= self.max_requests
+
+    def record(self, key: str) -> None:
+        """Record an event after it has been classified as a failure."""
+        now = time.time()
+        with self._lock:
+            window_start, count = self._buckets.get(key, (now, 0))
+            if now - window_start > self.window_seconds:
+                window_start, count = now, 0
+            self._buckets[key] = (window_start, count + 1)
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            self._buckets.pop(key, None)
+
     def cleanup(self):
         """Remove expired entries. Call periodically."""
         now = time.time()
@@ -39,8 +62,12 @@ class RateLimiter:
                 del self._buckets[k]
 
 
-# Per-IP: 5 login attempts per minute
-login_limiter = RateLimiter(max_requests=5, window_seconds=60)
+# Failed login limits: contain both targeted brute force and password spraying.
+# Successful authentication is not a failure and therefore does not consume
+# the budget. The IP-wide bucket is deliberately broader than the identity
+# bucket so one actor cannot evade limits by rotating usernames.
+login_ip_failure_limiter = RateLimiter(max_requests=20, window_seconds=300)
+login_identity_failure_limiter = RateLimiter(max_requests=5, window_seconds=300)
 
 # Global: 100 requests per minute per IP
 global_limiter = RateLimiter(max_requests=100, window_seconds=60)
@@ -54,10 +81,25 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def check_login_rate_limit(request: Request) -> None:
+def _login_identity_key(request: Request, username: str) -> str:
+    return f"{get_client_ip(request)}:{username.strip().casefold()}"
+
+
+def check_login_rate_limit(request: Request, username: str) -> None:
     ip = get_client_ip(request)
-    if not login_limiter.is_allowed(ip):
+    if login_ip_failure_limiter.is_blocked(ip) or login_identity_failure_limiter.is_blocked(
+        _login_identity_key(request, username)
+    ):
         raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试。")
+
+
+def record_login_failure(request: Request, username: str) -> None:
+    login_ip_failure_limiter.record(get_client_ip(request))
+    login_identity_failure_limiter.record(_login_identity_key(request, username))
+
+
+def reset_login_identity_limit(request: Request, username: str) -> None:
+    login_identity_failure_limiter.reset(_login_identity_key(request, username))
 
 
 def check_global_rate_limit(request: Request) -> None:

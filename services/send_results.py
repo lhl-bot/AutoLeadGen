@@ -21,8 +21,16 @@ def record_send_success(
     body: str,
     message_id: Optional[str] = None,
 ) -> EmailLog:
+    prior_outbound_exists = db.query(EmailLog.id).filter(
+        EmailLog.lead_id == lead.id,
+        EmailLog.direction == "outbound",
+    ).first() is not None
     lead.status = "sent"
     lead.send_fail_count = 0
+    lead.automation_block_reason = None
+    lead.automation_blocked_at = None
+    if prior_outbound_exists:
+        lead.followup_count = (lead.followup_count or 0) + 1
     email_log = EmailLog(
         lead_id=lead.id,
         direction="outbound",

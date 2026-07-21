@@ -58,6 +58,9 @@ def list_leads(
     workflow_id: Optional[int] = Query(None),
     pool_id: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
+    research_status: Optional[Literal["valid", "insufficient", "missing"]] = Query(None),
+    email_status: Optional[Literal["valid", "unknown", "invalid", "no_email"]] = Query(None),
+    contact_history: Optional[Literal["never_contacted", "contacted"]] = Query(None),
     search: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
@@ -98,6 +101,32 @@ def list_leads(
 
     if status:
         query = query.filter(models.Lead.status == status)
+    if research_status == "missing":
+        query = query.filter(~models.Lead.brief.has())
+    elif research_status:
+        query = query.filter(models.Lead.brief.has(
+            models.LeadBrief.research_status == research_status
+        ))
+    if email_status == "no_email":
+        query = query.filter(or_(
+            models.Lead.email.is_(None),
+            models.Lead.email == "",
+            models.Lead.email_validation_status == "no_email",
+        ))
+    elif email_status:
+        query = query.filter(
+            models.Lead.email.isnot(None),
+            models.Lead.email != "",
+            models.Lead.email_validation_status == email_status,
+        )
+    if contact_history == "never_contacted":
+        query = query.filter(~models.Lead.email_logs.any(
+            models.EmailLog.direction == "outbound"
+        ))
+    elif contact_history == "contacted":
+        query = query.filter(models.Lead.email_logs.any(
+            models.EmailLog.direction == "outbound"
+        ))
     if search:
         search_term = f"%{search}%"
         query = query.filter(
@@ -124,6 +153,12 @@ def review_center(
         base.with_entities(
             func.sum(case((models.Lead.status == "drafted", 1), else_=0)).label("drafted"),
             func.sum(case((models.Lead.status == "needs_email", 1), else_=0)).label("needs_email"),
+            func.sum(case((or_(
+                models.Lead.status == "needs_research",
+                models.Lead.automation_block_reason.like("research%"),
+                models.Lead.automation_block_reason == "company_relevance_not_verified",
+                models.Lead.automation_block_reason == "role_not_verified",
+            ), 1), else_=0)).label("needs_research"),
             func.sum(case((models.Lead.status == "send_failed", 1), else_=0)).label("send_failed"),
             func.sum(case((
                 or_(
@@ -154,12 +189,19 @@ def review_center(
         "counts": {
             "drafted": int(counts.drafted or 0),
             "needs_email": int(counts.needs_email or 0),
+            "needs_research": int(counts.needs_research or 0),
             "send_failed": int(counts.send_failed or 0),
             "high_intent": int(counts.high_intent or 0),
         },
         "queues": {
             "drafted": queue(models.Lead.status == "drafted"),
             "needs_email": queue(models.Lead.status == "needs_email"),
+            "needs_research": queue(or_(
+                models.Lead.status == "needs_research",
+                models.Lead.automation_block_reason.like("research%"),
+                models.Lead.automation_block_reason == "company_relevance_not_verified",
+                models.Lead.automation_block_reason == "role_not_verified",
+            )),
             "send_failed": queue(models.Lead.status == "send_failed"),
             "high_intent": queue(or_(
                 models.Lead.reply_intent.in_(("interested", "more_info")),
@@ -340,7 +382,13 @@ async def bulk_send_reviewed_drafts(
             continue
 
         try:
-            send_result = await send_lead_email(lead, workflow, db, raise_on_credit_error=True)
+            send_result = await send_lead_email(
+                lead,
+                workflow,
+                db,
+                raise_on_credit_error=True,
+                manual_reviewed=True,
+            )
             db.refresh(lead)
             results.append({
                 "lead_id": lead_id,
@@ -469,6 +517,33 @@ def _verify_lead_ownership(lead_id: int, db: Session, user: models.User) -> mode
     return lead
 
 
+@router.post("/{lead_id}/research/retry")
+def retry_lead_research(
+    lead_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    lead = _verify_lead_ownership(lead_id, db, user)
+    from services.research_quality import is_usable_company_domain, utcnow
+
+    if not is_usable_company_domain(lead.domain):
+        raise HTTPException(status_code=400, detail="Set a valid company domain before retrying research")
+    has_outbound = db.query(models.EmailLog.id).filter(
+        models.EmailLog.lead_id == lead.id,
+        models.EmailLog.direction == "outbound",
+    ).first() is not None
+    lead.status = "needs_research" if not has_outbound else lead.status
+    lead.automation_block_reason = "research_refresh_queued"
+    lead.automation_blocked_at = utcnow()
+    db.commit()
+
+    from services.research_agent import refresh_lead_research
+
+    background_tasks.add_task(refresh_lead_research, lead.id)
+    return {"ok": True, "lead_id": lead.id, "status": "queued"}
+
+
 @router.put("/{lead_id}", response_model=schemas.Lead)
 def update_lead(lead_id: int, lead_update: schemas.LeadCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     db_lead = _verify_lead_ownership(lead_id, db, user)
@@ -589,7 +664,13 @@ async def send_reviewed_draft(
 
     from services.outbound_engine import send_lead_email
     try:
-        send_result = await send_lead_email(db_lead, workflow, db, raise_on_credit_error=True)
+        send_result = await send_lead_email(
+            db_lead,
+            workflow,
+            db,
+            raise_on_credit_error=True,
+            manual_reviewed=True,
+        )
     except InsufficientCreditsError as exc:
         raise HTTPException(
             status_code=402,

@@ -101,6 +101,8 @@ class WorkflowBase(BaseModel):
     auto_followup: bool = False
     max_followups: int = 3
     followup_steps: Optional[List[FollowupStep]] = Field(default=None, max_length=6)
+    email_sending_paused: bool = False
+    email_pause_reason: Optional[str] = None
     template_id: Optional[int] = None
     search_offset: int = 0
 
@@ -174,6 +176,8 @@ class LeadBase(BaseModel):
     followup_count: int = 0
     last_reply_at: Optional[datetime] = None
     reply_snippet: Optional[str] = None
+    automation_block_reason: Optional[str] = None
+    automation_blocked_at: Optional[datetime] = None
     has_replied: bool = False
     reply_intent: Optional[str] = None
     # Feedback & verification
@@ -270,6 +274,10 @@ class LeadBriefResponse(BaseModel):
     specific_products: Optional[str] = None
     recent_activity: Optional[str] = None
     personalization_hook: Optional[str] = None
+    research_status: str
+    quality_flags: Optional[List[str]] = None
+    evidence_sources: Optional[List[dict]] = None
+    researched_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

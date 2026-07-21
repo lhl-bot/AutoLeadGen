@@ -19,6 +19,7 @@ from services.email_threads import (
     inbound_message_exists,
 )
 from services.suppression import suppress_lead
+from product_v2.runtime.reply_parser import detect_unsubscribe_intent, extract_latest_reply
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,8 @@ def test_imap_connection(imap_host: str, imap_port: int, email_user: str, email_
         return {"success": False, "message": str(e)}
 
 def _get_text_from_email(msg) -> str:
-    text_content = ""
+    plain_parts = []
+    html_parts = []
     if msg.is_multipart():
         for part in msg.walk():
             content_type = part.get_content_type()
@@ -44,7 +46,8 @@ def _get_text_from_email(msg) -> str:
                     payload = part.get_payload(decode=True)
                     if payload:
                         charset = part.get_content_charset() or "utf-8"
-                        text_content += payload.decode(charset, errors="replace")
+                        decoded = payload.decode(charset, errors="replace")
+                        (plain_parts if content_type == "text/plain" else html_parts).append(decoded)
                 except Exception:
                     pass
     else:
@@ -52,10 +55,14 @@ def _get_text_from_email(msg) -> str:
             payload = msg.get_payload(decode=True)
             if payload:
                 charset = msg.get_content_charset() or "utf-8"
-                text_content = payload.decode(charset, errors="replace")
+                decoded = payload.decode(charset, errors="replace")
+                (plain_parts if msg.get_content_type() == "text/plain" else html_parts).append(decoded)
         except Exception:
             pass
-    return text_content.strip()
+    # Prefer text/plain and never concatenate the HTML duplicate.  Intent
+    # detection sees only the newest reply after quoted history/signatures.
+    selected = "\n".join(plain_parts or html_parts)
+    return extract_latest_reply(selected)
 
 
 def _decode_header_value(value: str) -> str:
@@ -321,11 +328,8 @@ def check_inbox_for_replies():
                                     db.add(db_log)
                                     
                                     # === Unsubscribe Detection ===
-                                    _unsub_keywords = ["unsubscribe", "opt out", "opt-out", "stop emailing",
-                                                       "remove me", "take me off", "don't contact", "do not contact",
-                                                       "no longer wish", "退订", "取消订阅"]
-                                    reply_lower = (reply_text + " " + subject).lower()
-                                    is_unsubscribe = any(kw in reply_lower for kw in _unsub_keywords)
+                                    unsubscribe_intent = detect_unsubscribe_intent(reply_text, subject)
+                                    is_unsubscribe = bool(unsubscribe_intent)
                                     
                                     if is_unsubscribe:
                                         lead.has_replied = True
@@ -333,7 +337,13 @@ def check_inbox_for_replies():
                                         suppress_lead(db, lead, reason="unsubscribe", source="inbound_reply")
                                         lead.last_reply_at = datetime.now(timezone.utc)
                                         lead.reply_snippet = reply_text[:200]
-                                        logger.info(f"[UNSUB] Lead {sender_email} requested unsubscribe. Marked as unsubscribed. Msg ID: {msg_id}")
+                                        logger.info(
+                                            "[UNSUB] Lead %s requested unsubscribe at %s scope via phrase %s. Msg ID: %s",
+                                            sender_email,
+                                            unsubscribe_intent.scope,
+                                            unsubscribe_intent.matched_phrase,
+                                            msg_id,
+                                        )
                                         db.commit()
                                         continue
                                     

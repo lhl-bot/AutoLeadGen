@@ -7,6 +7,11 @@ import re
 from sqlalchemy.orm import Session
 
 import models
+from services.research_quality import (
+    classify_product_evidence,
+    is_personal_email_domain,
+    target_terms_for,
+)
 
 
 HANDOFF_INTENT_TERMS = [
@@ -20,6 +25,20 @@ DECISION_ROLE_TERMS = [
     "buyer", "purchasing", "procurement", "sourcing", "category manager",
     "merchandiser", "import manager", "sales manager", "business development",
 ]
+
+
+def role_matches_target(
+    job_title: Optional[str],
+    workflow: Optional[models.Workflow] = None,
+    persona: Optional[models.CustomerPersona] = None,
+) -> bool:
+    title = (job_title or "").strip().lower()
+    if not title:
+        return False
+    role_terms = _split_terms(getattr(workflow, "target_positions", None))
+    if persona:
+        role_terms.extend(_split_terms(persona.target_roles))
+    return bool(_matched_terms(title, role_terms) or _matched_terms(title, DECISION_ROLE_TERMS))
 
 
 @dataclass
@@ -160,6 +179,8 @@ def score_lead_fit(
         target_terms.extend(_split_terms(persona.target_countries))
         target_terms.extend(_split_terms(persona.target_industry))
 
+    research_target_terms = target_terms_for(workflow, persona)
+
     target_matches = _matched_terms(text, target_terms)
     if target_matches:
         score += min(20, 6 + len(target_matches[:5]) * 3)
@@ -189,6 +210,13 @@ def score_lead_fit(
             score += 4
             signals.append("pain points inferred")
 
+    email_domain = (lead.email or "").rsplit("@", 1)[-1].lower() if "@" in (lead.email or "") else ""
+    if is_personal_email_domain(lead.domain) or (
+        lead.domain and lead.domain.lower() == email_domain and is_personal_email_domain(email_domain)
+    ):
+        score -= 25
+        risks.append("personal email domain is not company evidence")
+
     if lead.linkedin_url:
         score += 5
         signals.append("LinkedIn profile available")
@@ -217,13 +245,27 @@ def score_lead_fit(
         score -= 30
         risks.append("user marked non-target")
 
+    brief_data = {
+        "company_overview": getattr(brief, "company_overview", None),
+        "specific_products": getattr(brief, "specific_products", None),
+        "personalization_hook": getattr(brief, "personalization_hook", None),
+    }
+    evidence_level = classify_product_evidence(brief_data, research_target_terms) if brief else "none"
+    research_status = getattr(brief, "research_status", None) if brief else None
+    if research_status == "invalid_source" or evidence_level == "none":
+        score = min(score, 49)
+        risks.append("no verified target-product evidence; score capped at 49")
+    elif evidence_level == "adjacent":
+        score = min(score, 69)
+        risks.append("adjacent-category evidence only; score capped at 69")
+
     score = max(0, min(100, score))
     grade = _grade(score)
 
     triggers = HANDOFF_INTENT_TERMS[:]
     if workflow and workflow.manual_handoff_triggers:
         triggers.extend(_split_terms(workflow.manual_handoff_triggers))
-    is_contacted = lead.status not in {"found", "needs_email", "invalid_email", "drafted", "send_failed", "bounced", "low_score"}
+    is_contacted = lead.status not in {"found", "needs_email", "needs_research", "invalid_email", "drafted", "send_failed", "bounced", "low_score"}
     intent_matches = _matched_terms(lead.reply_snippet or "", HANDOFF_INTENT_TERMS)
     positive_reply = lead.reply_intent in {"interested", "more_info"}
     legacy_reply = lead.status == "replied" and not lead.reply_intent

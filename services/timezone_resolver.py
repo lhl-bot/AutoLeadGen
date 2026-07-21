@@ -126,4 +126,11 @@ def guess_timezone_from_country(country: str) -> Optional[str]:
     """Map a country name to its primary IANA timezone."""
     if not country:
         return None
-    return _COUNTRY_TIMEZONE_MAP.get(country.lower().strip())
+    normalized = country.lower().strip()
+    exact = _COUNTRY_TIMEZONE_MAP.get(normalized)
+    if exact:
+        return exact
+    for name in sorted(_COUNTRY_TIMEZONE_MAP, key=len, reverse=True):
+        if name in normalized:
+            return _COUNTRY_TIMEZONE_MAP[name]
+    return None

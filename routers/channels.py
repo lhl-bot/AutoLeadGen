@@ -13,6 +13,7 @@ from services.unipile_client import UnipileClient
 from services.auth import get_current_user
 from services.credits import InsufficientCreditsError, consume_credits, refund_credits
 from services.suppression import owner_id_for_lead, suppression_reason, suppress_lead
+from product_v2.runtime.reply_parser import detect_unsubscribe_intent, extract_latest_reply
 import logging
 
 logger = logging.getLogger("channels_api")
@@ -329,13 +330,9 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
             
             if lead:
                 # We have a reply from a known lead!
-                reply_lower = (text or "").lower()
-                unsub_keywords = [
-                    "unsubscribe", "opt out", "opt-out", "stop messaging",
-                    "stop emailing", "remove me", "do not contact", "don't contact",
-                    "退订", "取消订阅", "不要联系",
-                ]
-                if any(keyword in reply_lower for keyword in unsub_keywords):
+                latest_text = extract_latest_reply(text or "")
+                unsubscribe_intent = detect_unsubscribe_intent(latest_text)
+                if unsubscribe_intent:
                     lead.has_replied = True
                     lead.reply_intent = "unsubscribe"
                     suppress_lead(db, lead, reason="unsubscribe", source="unipile_message")
@@ -343,7 +340,7 @@ async def unipile_webhook(request: Request, background_tasks: BackgroundTasks, d
                     lead.status = "replied"
                     lead.has_replied = True
                     lead.reply_intent = "other"
-                lead.reply_snippet = text
+                lead.reply_snippet = latest_text
                 from datetime import datetime, timezone
                 lead.last_reply_at = datetime.now(timezone.utc)
                 db.commit()

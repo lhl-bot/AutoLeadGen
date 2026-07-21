@@ -4,12 +4,15 @@ from sqlalchemy.orm import sessionmaker
 
 import os
 from dotenv import load_dotenv
-load_dotenv(override=os.environ.get("AUTOLEADGEN_ENV", "").lower() != "test")
+from runtime_config import read_secret
+# Explicit process/container configuration must always win over repository .env.
+# Overriding it can redirect local migrations or backfills to an unrelated DB.
+load_dotenv(override=False)
 
-# DATABASE_URL must be set in .env
-SQLALCHEMY_DATABASE_URL = os.environ.get("DATABASE_URL")
-if not SQLALCHEMY_DATABASE_URL:
-    raise RuntimeError("❌ DATABASE_URL is not set! Please configure it in your .env file. Example: mysql+pymysql://user:pass@host:3306/dbname?charset=utf8mb4")
+# Direct environment variables remain convenient locally; production can mount
+# a secret and set DATABASE_URL_FILE without exposing credentials in process
+# listings, Compose files, or checked-in env files.
+SQLALCHEMY_DATABASE_URL = read_secret("DATABASE_URL", required=True)
 
 import time
 import functools

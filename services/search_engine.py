@@ -16,6 +16,14 @@ logger = logging.getLogger("outbound_engine")
 _tavily_disabled_until = 0.0
 _bocha_disabled_until = 0.0
 
+
+@dataclass(frozen=True)
+class GovernedSearchResult:
+    results: List[Dict[str, str]]
+    provider: str
+    cost_status: str
+    error: Optional[str] = None
+
 EUROPEAN_MARKETS = [
     "Spain", "Italy", "Germany", "France", "Netherlands", "United Kingdom",
     "Portugal", "Belgium", "Sweden", "Denmark", "Norway", "Finland",
@@ -667,6 +675,116 @@ def search_company_results(keywords: str, count: int = 10, offset: int = 0) -> L
         }
         for domain in domains[:count]
     ]
+
+
+def search_company_results_governed(
+    keywords: str,
+    count: int = 10,
+    offset: int = 0,
+) -> GovernedSearchResult:
+    """Search Tavily first and only fail over after an explicit no-charge failure.
+
+    A timeout, transport exception, 5xx, or malformed success response is
+    ``unknown`` because the Provider may have accepted and charged the call.
+    Callers must reconcile it manually and must never retry automatically.
+    """
+
+    count = _int_env("AGENT_COMPANY_SEARCH_COUNT", count, 1, 20)
+    modifier = ["", "Europe", "Spain", "Italy", "France", "Germany", "Netherlands", "UK"][(offset // 10) % 8]
+    search_query = f"{keywords} {modifier}".strip()
+    tavily_key = os.environ.get("TAVILY_API_KEY", "").strip()
+    tavily_failure = "tavily_credentials_missing"
+    if tavily_key:
+        try:
+            response = _http.post(
+                "https://api.tavily.com/search",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "api_key": tavily_key,
+                    "query": search_query,
+                    "search_depth": "basic",
+                    "max_results": min(max(count * 3, 10), 20),
+                },
+                timeout=20,
+            )
+        except Exception as exc:
+            return GovernedSearchResult([], "tavily", "unknown", type(exc).__name__)
+        if response.status_code == 200:
+            try:
+                raw_results = response.json().get("results", [])
+            except (TypeError, ValueError, AttributeError) as exc:
+                return GovernedSearchResult([], "tavily", "unknown", type(exc).__name__)
+            seen: set[str] = set()
+            results: List[Dict[str, str]] = []
+            for item in raw_results:
+                url = item.get("url", "")
+                domain = _extract_domain(url)
+                if not domain or domain in seen or _is_junk_domain(domain):
+                    continue
+                seen.add(domain)
+                results.append(
+                    {
+                        "title": _clean_title(item.get("title") or _title_from_domain(domain)),
+                        "url": url if url.startswith("http") else f"https://{domain}",
+                        "domain": domain,
+                        "snippet": (item.get("content") or "").strip(),
+                        "source": "tavily",
+                    }
+                )
+                if len(results) >= count:
+                    break
+            return GovernedSearchResult(results, "tavily", "charged")
+        if response.status_code not in {400, 401, 403}:
+            return GovernedSearchResult(
+                [],
+                "tavily",
+                "unknown",
+                f"http_{response.status_code}",
+            )
+        tavily_failure = f"http_{response.status_code}_not_billable"
+
+    bocha_key = os.environ.get("BOCHA_API_KEY", "").strip()
+    if not bocha_key:
+        return GovernedSearchResult([], "tavily", "failed", tavily_failure)
+    try:
+        response = _http.post(
+            os.environ.get("BOCHA_API_URL", "https://api.bochaai.com/v1/web-search"),
+            headers={"Authorization": f"Bearer {bocha_key}", "Content-Type": "application/json"},
+            json={
+                "query": search_query,
+                "freshness": os.environ.get("BOCHA_SEARCH_FRESHNESS", "noLimit"),
+                "summary": _bool_env("BOCHA_SEARCH_SUMMARY", False),
+                "count": max(1, min(count, 20)),
+            },
+            timeout=_int_env("BOCHA_SEARCH_TIMEOUT", 20, 5, 60),
+        )
+    except Exception as exc:
+        return GovernedSearchResult([], "bocha", "unknown", type(exc).__name__)
+    if response.status_code != 200:
+        cost_status = "failed" if response.status_code in {400, 401, 403} else "unknown"
+        return GovernedSearchResult([], "bocha", cost_status, f"http_{response.status_code}")
+    try:
+        pages = _bocha_web_pages(response.json())
+    except (TypeError, ValueError, AttributeError) as exc:
+        return GovernedSearchResult([], "bocha", "unknown", type(exc).__name__)
+    results = []
+    for item in pages:
+        url = item.get("url") or item.get("link") or ""
+        domain = _extract_domain(url)
+        if not domain or _is_junk_domain(domain):
+            continue
+        results.append(
+            {
+                "title": _clean_title(item.get("name") or item.get("title") or _title_from_domain(domain)),
+                "url": url if url.startswith("http") else f"https://{domain}",
+                "domain": domain,
+                "snippet": (item.get("snippet") or item.get("summary") or "").strip(),
+                "source": "bocha",
+            }
+        )
+        if len(results) >= count:
+            break
+    return GovernedSearchResult(results, "bocha", "charged")
 
 
 def _search_tavily_company_results(keywords: str, count: int, offset: int, api_key: str) -> List[Dict[str, str]]:

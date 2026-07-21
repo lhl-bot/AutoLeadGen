@@ -1,32 +1,40 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 
 import models
 from database import get_db
 from services.auth import (
     hash_password, verify_password, create_access_token,
-    cache_auth_user, get_current_user, invalidate_auth_user, require_admin
+    cache_auth_user, clear_auth_cookies, get_current_user, invalidate_auth_user,
+    require_admin, set_auth_cookies,
 )
-from middleware.rate_limit import check_login_rate_limit
+from middleware.rate_limit import (
+    check_login_rate_limit,
+    record_login_failure,
+    reset_login_identity_limit,
+)
+from product_v2.schemas import ErrorResponse
 from services.credits import default_initial_balance, ensure_credit_wallet
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
 
 class CreateUserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=12, max_length=128)
     display_name: Optional[str] = None
     is_admin: bool = False
     initial_credits: Optional[int] = None
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     display_name: Optional[str]
@@ -34,22 +42,38 @@ class UserResponse(BaseModel):
     is_active: bool = True
     credit_balance: int = 0
 
-    class Config:
-        from_attributes = True
+class LoginResponse(BaseModel):
+    token: str
+    user: UserResponse
 
 
-@router.post("/login")
-def login(request: LoginRequest, db: Session = Depends(get_db), req: Request = None):
+@router.post(
+    "/login",
+    response_model=LoginResponse,
+    responses={
+        401: {"model": ErrorResponse, "description": "Username or password is invalid"},
+        403: {"model": ErrorResponse, "description": "The account is disabled"},
+        429: {"model": ErrorResponse, "description": "Too many login attempts"},
+    },
+)
+def login(
+    request: LoginRequest,
+    response: Response,
+    req: Request,
+    db: Session = Depends(get_db),
+):
     """Authenticate user and return JWT token."""
-    if req:
-        check_login_rate_limit(req)
+    check_login_rate_limit(req, request.username)
     user = db.query(models.User).filter(models.User.username == request.username).first()
     if not user or not verify_password(request.password, user.hashed_password):
+        record_login_failure(req, request.username)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账号已被禁用")
+    reset_login_identity_limit(req, request.username)
     
     token = create_access_token(user.id, user.is_admin)
+    set_auth_cookies(response, token)
     wallet = ensure_credit_wallet(db, user.id)
     cache_auth_user(user, credit_balance=wallet.balance)
     db.commit()
@@ -64,6 +88,15 @@ def login(request: LoginRequest, db: Session = Depends(get_db), req: Request = N
             "credit_balance": wallet.balance,
         }
     }
+
+
+@router.post("/logout", status_code=204)
+def logout(
+    response: Response,
+    _user: models.User = Depends(get_current_user),
+):
+    """Revoke the current browser session cookies on this device."""
+    clear_auth_cookies(response)
 
 
 @router.get("/me", response_model=UserResponse)

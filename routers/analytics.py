@@ -82,7 +82,7 @@ def get_dashboard_stats(db: Session = Depends(get_db), user: models.User = Depen
         q = db.query(models.Workflow)
         return q if user.is_admin else q.filter(models.Workflow.user_id == user.id)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     window_start = (now - timedelta(days=13)).replace(hour=0, minute=0, second=0, microsecond=0)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 

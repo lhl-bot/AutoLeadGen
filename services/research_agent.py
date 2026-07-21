@@ -5,7 +5,13 @@ import logging
 from bs4 import BeautifulSoup
 import httpx
 from database import SessionLocal
-from models import Lead, LeadBrief
+from models import CustomerPersona, EmailLog, Lead, LeadBrief, Workflow
+from services.research_quality import (
+    assess_research,
+    sanitize_brief_data,
+    target_terms_for,
+    utcnow,
+)
 
 logger = logging.getLogger("research_agent")
 logger.setLevel(logging.INFO)
@@ -176,23 +182,8 @@ IMPORTANT: Return ONLY a valid JSON string without markdown formatting."""
     }
 
 def _normalize_brief_data(brief_data: dict) -> dict:
-    pain_points = brief_data.get("pain_points", "")
-    if isinstance(pain_points, list):
-        pain_points = ", ".join(str(p) for p in pain_points)
-        
-    specific_products = brief_data.get("specific_products", "")
-    if isinstance(specific_products, list):
-        specific_products = ", ".join(str(p) for p in specific_products)
-
-    return {
-        "company_overview": brief_data.get("company_overview", ""),
-        "pain_points": pain_points,
-        "recent_news": brief_data.get("recent_news", brief_data.get("recent_activity", "")),
-        "value_proposition_alignment": brief_data.get("value_proposition_alignment", ""),
-        "specific_products": specific_products,
-        "recent_activity": brief_data.get("recent_activity", ""),
-        "personalization_hook": brief_data.get("personalization_hook", ""),
-    }
+    normalized, _ = sanitize_brief_data(brief_data)
+    return normalized
 
 async def research_company(domain: str) -> dict:
     """Scrape and analyze a company domain without writing sandbox data to the database."""
@@ -201,35 +192,81 @@ async def research_company(domain: str) -> dict:
     brief_data = await generate_brief_from_llm(domain, scraped_text)
     return _normalize_brief_data(brief_data)
 
-async def build_and_save_lead_brief(lead_id: int, domain: str) -> bool:
+async def build_and_save_lead_brief(lead_id: int, domain: str, *, force: bool = False) -> bool:
     """
     Main entry point: Scrapes the site, asks LLM for a brief, and saves it to DB.
     """
     db = SessionLocal()
     try:
-        # Check if already exists
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if not lead:
+            return False
+        workflow = db.query(Workflow).filter(Workflow.id == lead.workflow_id).first() if lead.workflow_id else None
+        persona = None
+        if workflow and workflow.persona_id:
+            persona = db.query(CustomerPersona).filter(CustomerPersona.id == workflow.persona_id).first()
+        target_terms = target_terms_for(workflow, persona)
+        source_labels = [part.strip() for part in (lead.data_sources or "").split(",") if part.strip()]
+
+        # Existing briefs are classified once without repeating paid/LLM work.
         existing = db.query(LeadBrief).filter(LeadBrief.lead_id == lead_id).first()
-        if existing:
-            return True
+        if existing and not force:
+            if not existing.research_status or existing.research_status == "pending":
+                existing_data = {
+                    "company_overview": existing.company_overview,
+                    "pain_points": existing.pain_points,
+                    "recent_news": existing.recent_news,
+                    "value_proposition_alignment": existing.value_proposition_alignment,
+                    "specific_products": existing.specific_products,
+                    "recent_activity": existing.recent_activity,
+                    "personalization_hook": existing.personalization_hook,
+                }
+                cleaned, placeholder_flags = sanitize_brief_data(existing_data)
+                assessment = assess_research(
+                    domain=domain,
+                    brief_data=cleaned,
+                    target_terms=target_terms,
+                    source_labels=source_labels,
+                )
+                for field, value in cleaned.items():
+                    setattr(existing, field, value)
+                existing.research_status = assessment.status
+                existing.quality_flags = list(dict.fromkeys(placeholder_flags + assessment.flags))
+                existing.evidence_sources = assessment.evidence_sources
+                existing.researched_at = utcnow()
+                db.commit()
+            return existing.research_status == "valid"
 
         logger.info(f"Building brief for {domain} (Lead {lead_id})...")
-        brief_data = await research_company(domain)
-
-        new_brief = LeadBrief(
-            lead_id=lead_id,
-            company_overview=brief_data.get("company_overview", ""),
-            pain_points=brief_data.get("pain_points", ""),
-            recent_news=brief_data.get("recent_news", ""),
-            value_proposition_alignment=brief_data.get("value_proposition_alignment", ""),
-            specific_products=brief_data.get("specific_products", ""),
-            recent_activity=brief_data.get("recent_activity", ""),
-            personalization_hook=brief_data.get("personalization_hook", "")
+        scraped_text = await scrape_company_data(domain)
+        raw_brief_data = await generate_brief_from_llm(domain, scraped_text)
+        brief_data, placeholder_flags = sanitize_brief_data(raw_brief_data)
+        assessment = assess_research(
+            domain=domain,
+            brief_data=brief_data,
+            target_terms=target_terms,
+            scraped_text=scraped_text,
+            source_labels=source_labels,
         )
-        db.add(new_brief)
+
+        new_brief = existing or LeadBrief(lead_id=lead_id)
+        new_brief.company_overview = brief_data.get("company_overview")
+        new_brief.pain_points = brief_data.get("pain_points")
+        new_brief.recent_news = brief_data.get("recent_news")
+        new_brief.value_proposition_alignment = brief_data.get("value_proposition_alignment")
+        new_brief.specific_products = brief_data.get("specific_products")
+        new_brief.recent_activity = brief_data.get("recent_activity")
+        new_brief.personalization_hook = brief_data.get("personalization_hook")
+        new_brief.research_status = assessment.status
+        new_brief.quality_flags = list(dict.fromkeys(placeholder_flags + assessment.flags))
+        new_brief.evidence_sources = assessment.evidence_sources
+        new_brief.researched_at = utcnow()
+        if not existing:
+            db.add(new_brief)
         try:
             db.commit()
             logger.info(f"Successfully saved brief for {domain}.")
-            return True
+            return assessment.status == "valid"
         except Exception as commit_exc:
             db.rollback()
             # Double check if someone else inserted it in the meantime
@@ -242,5 +279,42 @@ async def build_and_save_lead_brief(lead_id: int, domain: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to build brief for lead {lead_id}: {e}")
         return False
+    finally:
+        db.close()
+
+
+async def refresh_lead_research(lead_id: int) -> bool:
+    """Force one human-requested research refresh without any contact lookup."""
+    db = SessionLocal()
+    try:
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if not lead or not lead.domain:
+            return False
+        domain = lead.domain
+    finally:
+        db.close()
+
+    is_valid = await build_and_save_lead_brief(lead_id, domain, force=True)
+    db = SessionLocal()
+    try:
+        lead = db.query(Lead).filter(Lead.id == lead_id).first()
+        if not lead:
+            return False
+        has_outbound = db.query(Lead).filter(
+            Lead.id == lead_id,
+            Lead.email_logs.any(EmailLog.direction == "outbound"),
+        ).first() is not None
+        if is_valid:
+            lead.automation_block_reason = None
+            lead.automation_blocked_at = None
+            if not has_outbound and lead.status == "needs_research":
+                lead.status = "found"
+        else:
+            lead.automation_block_reason = "research_not_valid"
+            lead.automation_blocked_at = utcnow()
+            if not has_outbound:
+                lead.status = "needs_research"
+        db.commit()
+        return is_valid
     finally:
         db.close()

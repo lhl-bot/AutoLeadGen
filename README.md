@@ -1,7 +1,7 @@
 # haiwaike - AI-Powered B2B Lead Generation Platform
 
 <p align="center">
-  <strong>An end-to-end intelligent outbound prospecting system that searches, qualifies, personalizes, and sends emails to B2B leads on autopilot.</strong>
+  <strong>A Company-first, human-governed multi-channel sales system built around qualified opportunities.</strong>
 </p>
 
 <p align="center">
@@ -16,17 +16,34 @@
 
 ## What is this?
 
-AutoLeadGen is a **full-stack lead generation platform** built for outbound sales teams, SDRs, and solo founders who want to automate their B2B prospecting workflow. Instead of manually searching Google, looking up emails on Snov.io, writing personalized emails one by one, and sending them through Gmail, this system does all of it in a continuous background loop.
+> **Product V2 release scope:** the active product is Company-first and
+> Opportunity-led. FastAPI does not create tables or start worker threads at boot;
+> Alembic owns schema changes and database-leased processes own automation. Local
+> execution is fake-only. The checked-in production path supports reviewed Email
+> plus separately approved, exact-owner automatic Email over SMTP, and
+> reply/bounce/complaint ingestion over IMAP; LinkedIn, WhatsApp,
+> prospecting, and research have no approved real V2 connector in this release.
+> The invitation pilot includes a five-step first-contact activation flow and a
+> shared CSV/AI candidate workspace, while paid acquisition remains fake-only
+> until its independent safety and cost gate is approved.
+
+AutoLeadGen is a full-stack sales-development platform for managing Companies,
+Contacts, contact points, Campaign revisions, multi-Campaign Enrollments,
+Conversations, human-confirmed Opportunities, Tasks, consent, cost, and audit history.
+Automation is subordinate to persisted readiness and hard safety gates.
 
 **The typical flow:**
 
 ```
-Define your ideal customer → AI searches the web → Finds decision-makers → 
-Verifies emails → Writes personalized outreach → Sends via SMTP → 
-Monitors inbox for replies → AI drafts follow-ups
+Publish ICP and Campaign revision → Build Companies, Contacts, and Lists →
+Pass persisted readiness checks → Enroll contacts → Execute channel steps →
+Classify replies → Human confirms handoff → Manage qualified Opportunity
 ```
 
-It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarter over time through your feedback.
+AI proposes research, classifications, and changes; people publish ICP changes,
+confirm positive signals, and own commercial decisions. Consent, invalid contact
+points, duplicate prevention, safety locks, account faults, and capacity limits are
+never bypassed by an AI or manual soft override.
 
 ---
 
@@ -52,11 +69,13 @@ It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarte
 - **Multi-language support** - Writes in English, Chinese, Spanish, German, and more
 
 ### Automated Outreach
-- **Multi-account rotation** - Round-robin across multiple SMTP accounts
-- **Daily sending caps** - Configurable per-account limits to stay under radar
-- **Cooldown periods** - Domain-level rate limiting to avoid spam filters
-- **HTML email templates** - Professional branded emails with proper formatting
-- **Thread tracking** - Follow-ups maintain proper In-Reply-To headers
+- **Immutable reviewed messages** - The exact subject/body snapshot is approved before SMTP
+- **Bound sender identity** - Every attempt freezes its owner, channel, and sender account
+- **Daily sending caps** - Per-account and campaign budget enforcement at the final boundary
+- **Cooldown and consent gates** - Contact/company locks prevent unsafe cross-campaign sends
+- **Uncertain-delivery containment** - Ambiguous SMTP outcomes are never auto-retried
+- **Complaint containment** - Abuse reports suppress the recipient and hard-lock the sender account
+- **Controlled automatic mode** - Exact owner allowlist, approval ID, and deployment/account caps are rechecked at SMTP
 
 ### Reply Handling
 - **IMAP inbox monitoring** - Automatically detects when leads reply
@@ -66,9 +85,8 @@ It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarte
 - **One-click send** - Send directly from the dashboard
 
 ### Multi-Channel Outreach
-- **LinkedIn** - Send connection requests with personalized notes via Unipile
-- **WhatsApp** - Send messages to leads via Unipile
-- **Email** - Full SMTP/IMAP integration
+- **Email** - Production connector through SMTP/IMAP with Review-first and separately approved Auto modes
+- **LinkedIn / WhatsApp** - Modeled in V2 but deliberately blocked until separate connectors and approvals exist
 
 ### Dashboard & Analytics
 - **Dark-themed UI** - Clean, modern dashboard built with Next.js 16 + Tailwind CSS + shadcn/ui
@@ -99,10 +117,10 @@ It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarte
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘   │
 │       │              │              │              │         │
 │  ┌────▼──────────────▼──────────────▼──────────────▼─────┐  │
-│  │              Background Worker Threads                 │  │
-│  │  • Prospecting loop (search → enrich → draft)         │  │
-│  │  • Outbound loop (send emails with rate limiting)     │  │
-│  │  • Inbox monitor (IMAP polling for replies)           │  │
+│  │          Dedicated database-leased V2 workers          │  │
+│  │  • local/test: deterministic fake queue consumers       │  │
+│  │  • production: gated SMTP outbound + IMAP safety inbox  │  │
+│  │  • MySQL job/outbox · persisted cursor · lease fencing  │  │
 │  └───────────────────────────────────────────────────────┘  │
 └──────────────────────┬──────────────────────────────────────┘
                        │
@@ -127,14 +145,14 @@ It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarte
 | Layer | Technology |
 |-------|-----------|
 | **Frontend** | Next.js 16 (Turbopack), React 19, TypeScript, Tailwind CSS, shadcn/ui, Recharts, Framer Motion |
-| **Backend** | FastAPI, SQLAlchemy, Uvicorn, Python 3.9+ |
+| **Backend** | FastAPI, SQLAlchemy, Gunicorn/Uvicorn Worker, Python 3.11 |
 | **Database** | MySQL 8.0 / MariaDB |
 | **AI/LLM** | Alibaba Bailian (DeepSeek V4 Pro), OpenAI-compatible API |
 | **Search** | Tavily AI Search, Bocha AI Search |
 | **Enrichment** | Snov.io (email finder + verification) |
 | **Messaging** | Unipile (LinkedIn + WhatsApp API) |
 | **Email** | SMTP/IMAP via Python `smtplib` / `imaplib` |
-| **Auth** | JWT (python-jose) + bcrypt password hashing |
+| **Auth** | JWT (PyJWT) + Argon2 hashing with legacy bcrypt verification |
 | **Deployment** | Docker, Docker Compose |
 
 ---
@@ -142,58 +160,58 @@ It's like having a 24/7 SDR that never sleeps, never gets tired, and gets smarte
 ## Quick Start
 
 ### Prerequisites
-- Python 3.9+
-- Node.js 18+
-- MySQL 8.0+ (or use the included Docker Compose)
-- API keys: [Snov.io](https://snov.io), [Tavily](https://tavily.com), [Alibaba Bailian](https://bailian.console.aliyun.com)
 
-### Option 1: Docker Compose (Recommended)
+- Python 3.11 or newer
+- Node.js 22
+- `openssl` and `curl`
+
+Docker and external API keys are not required for the safe local workspace.
+Local development uses an isolated SQLite database, fake connectors, and a hard
+outbound pause by default.
+
+### Recommended local workspace
 
 ```bash
 git clone https://github.com/lhl-bot/AutoLeadGen.git
 cd AutoLeadGen
-cp .env.example .env
-# Edit .env with your API keys and database credentials
-
-docker compose up -d --build
+./scripts/dev.sh setup
+./run.sh
 ```
 
-Access the app at `http://localhost:3000`
+Open `http://localhost:3000`. The local username is `acceptance-admin`; run
+`./scripts/dev.sh password` in another terminal to read the generated password.
+Press Ctrl-C in the first terminal to stop both services.
 
-### Option 2: Local Development
+Useful commands:
+
+```bash
+./scripts/dev.sh status  # Probe frontend, API, and database readiness
+./scripts/dev.sh check   # Run backend tests and all frontend checks
+```
+
+Local state and logs live under `.local/dev/` and are ignored by Git. To avoid
+port conflicts, override `AUTOLEADGEN_BACKEND_PORT` or
+`AUTOLEADGEN_FRONTEND_PORT` when starting the app.
+
+### Manual development
 
 **Backend:**
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# Create the canonical virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings
+# Configure an isolated database and fake-only runtime, or use ./run.sh
 
-# Run database migrations
-python migrate.py
-python migrate_v2.py
-python migrate_v3.py
-python migrate_v4.py
-python migrate_v5.py
-python migrate_v6.py
-python migrate_v7.py
+# Run the additive Product V2 migration chain
+python -m alembic upgrade head
 
 # Start backend
 uvicorn main:app --reload --port 8001
-```
-
-**Backend tests:**
-
-```bash
-pip install -r requirements-dev.txt
-pytest
 ```
 
 **Frontend:**
@@ -202,10 +220,10 @@ pytest
 cd frontend
 
 # Install dependencies
-npm install
+npm ci
 
 # Configure frontend
-echo "NEXT_PUBLIC_API_BASE_URL=http://localhost:8001" > .env.local
+echo "BACKEND_URL=http://127.0.0.1:8001" > .env.local
 
 # Start frontend
 npm run dev
@@ -217,7 +235,8 @@ Access the app at `http://localhost:3000`
 
 ## Configuration
 
-The `.env` file is the single source of truth for all configuration. Key settings:
+Process environment variables override `.env`; production uses mounted secret
+files instead of committed values. Key settings:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
@@ -226,8 +245,9 @@ The `.env` file is the single source of truth for all configuration. Key setting
 | `LLM_API_KEY` | Alibaba Bailian API key | Yes |
 | `LLM_BASE_URL` | LLM API endpoint | Yes |
 | `LLM_MODEL` | Model name (e.g., `deepseek-v4-pro`) | Yes |
-| `SNOVIO_CLIENT_ID` | Snov.io client ID | Yes |
-| `SNOVIO_CLIENT_SECRET` | Snov.io client secret | Yes |
+| `SNOVIO_ENABLED` | Enable optional Snov.io enrichment; defaults to `false` | Optional |
+| `SNOVIO_CLIENT_ID` | Snov.io client ID | Only when Snov.io is enabled |
+| `SNOVIO_CLIENT_SECRET` | Snov.io client secret | Only when Snov.io is enabled |
 | `TAVILY_API_KEY` | Tavily search API key | Recommended |
 | `BOCHA_API_KEY` | Bocha search API key | Optional |
 | `UNIPILE_API_KEY` | Unipile API key for LinkedIn/WhatsApp | Optional |
@@ -248,54 +268,28 @@ See `.env.example` for the full list with descriptions.
 
 ```
 AutoLeadGen/
-├── main.py                    # FastAPI app entry point + lifespan
-├── models.py                  # SQLAlchemy ORM models
-├── schemas.py                 # Pydantic request/response schemas
+├── main.py                    # FastAPI API process (no workers or DDL at boot)
 ├── database.py                # Database engine + session factory
-├── requirements.txt           # Python dependencies
+├── models.py / schemas.py     # Legacy compatibility model and API contract
+├── alembic/                   # The only active schema migration chain
+├── product_v2/                # Company-first domain, API, runtime, and workers
 │
-├── routers/                   # API route handlers
-│   ├── auth.py               # Login / JWT token
-│   ├── workflows.py          # Outreach workflow CRUD
-│   ├── leads.py              # Lead management + rating
-│   ├── replies.py            # Reply tracking + AI draft generation
-│   ├── personas.py           # Customer persona management
-│   ├── channels.py           # LinkedIn/WhatsApp channels
-│   └── ...
-│
-├── services/                  # Business logic
-│   ├── outbound_engine.py    # Core outreach loop (search → draft → send)
-│   ├── search_engine.py      # Web search orchestration
-│   ├── ai_writer.py          # LLM email generation
-│   ├── agent_core.py         # AI conversational agent
-│   ├── lead_scoring.py       # AI-powered lead fit scoring
-│   ├── followup_engine.py    # Reply intent analysis + draft generation
-│   ├── snovio_client.py      # Snov.io API client
-│   ├── unipile_client.py     # Unipile (LinkedIn/WhatsApp) client
-│   ├── inbox_monitor.py      # IMAP polling for replies/bounces
-│   ├── email_sender.py       # SMTP email sending
-│   ├── email_verifier.py     # DNS/MX email validation
-│   ├── preference_learner.py # RLHF feedback loop
-│   └── ...
+├── routers/                   # Legacy/read-compatible API surface
+├── services/                  # Shared and legacy application services
 │
 ├── frontend/                  # Next.js 16 frontend
-│   ├── src/app/
-│   │   ├── dashboard/        # Dashboard pages
-│   │   │   ├── page.tsx      # Analytics overview
-│   │   │   ├── workflows/    # Workflow management
-│   │   │   ├── replies/      # Reply inbox + AI drafts
-│   │   │   ├── personas/     # Customer personas
-│   │   │   ├── pools/        # Client pools
-│   │   │   ├── agent/        # AI chat assistant
-│   │   │   └── ...
-│   │   ├── login/            # Login page
-│   │   └── layout.tsx        # Root layout
-│   └── src/components/       # Reusable UI components
+│   ├── src/app/               # Routes and route composition
+│   ├── src/features/v2/       # Product V2 API, pages, and components
+│   └── src/components/        # Shared and legacy UI components
 │
-├── Dockerfile                 # Backend Docker image
-├── docker-compose.yml         # Full stack orchestration
-├── migrate*.py                # Database migration scripts
-└── .env.example               # Environment template
+├── scripts/                   # Local, migration, release, and operations tools
+│   ├── dev.sh                 # Canonical safe local entrypoint
+│   └── product_v2_local.sh    # Optional isolated MySQL 8 integration environment
+├── tests/                     # Backend unit/integration contract tests
+├── docs/product_v2/           # V2 development and production runbooks
+├── compose.product-v2.yml     # Optional local MySQL only
+├── compose.production.yml     # Reviewed production topology
+└── migrate*.py                # Historical legacy migrations; do not run for V2
 ```
 
 ---
@@ -341,15 +335,13 @@ The dashboard includes:
 
 ## Deployment
 
-For production deployment on a cloud server:
-
-1. Set up a Linux server (Alibaba Cloud ECS, AWS EC2, etc.)
-2. Install Docker and Docker Compose
-3. Set up a MySQL database (Alibaba Cloud RDS recommended)
-4. Clone the repo and configure `.env`
-5. Run `docker compose up -d --build`
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed instructions.
+Do not use the development `docker-compose.yml` for production. Production uses
+digest-pinned signed images, mounted secret files, TLS, migration/preflight jobs,
+live control files, and the email-only canary sequence in
+[`docs/product_v2/PRODUCTION_CUTOVER_RUNBOOK.md`](docs/product_v2/PRODUCTION_CUTOVER_RUNBOOK.md).
+The operator starts from `deploy/production.env.example` and
+`compose.production.yml`; real SMTP remains hard-paused until the enable-real
+preflight and external approvals pass.
 
 ---
 

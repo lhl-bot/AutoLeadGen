@@ -43,6 +43,10 @@ def test_health_funnel_and_stuck(db_session):
     assert stuck["low_score"] == 1
     assert h["stuck"][0]["count"] >= h["stuck"][-1]["count"]
     assert h["by_source"]["leadcontact"] == 7
+    assert h["automation"]["search_state"] in {"running", "paused", "inactive", "backoff"}
+    assert h["quality"]["research_valid"] == 0
+    assert h["delivery"]["initial_sent"] == 0
+    assert h["providers"]["snovio_required"] is False
 
 
 def test_health_providers_and_warnings(db_session, monkeypatch):
@@ -55,7 +59,7 @@ def test_health_providers_and_warnings(db_session, monkeypatch):
 
     h = workflow_health(wf.id, db=db_session, user=user)
     assert h["providers"]["leadcontact"] == "configured"
-    assert h["providers"]["snovio"] == "missing"
+    assert h["providers"]["snovio"] == "disabled"
     assert h["providers"]["sender_accounts"] == 0
     # warnings should flag no sender + review-mode draft
     joined = " ".join(h["warnings"])

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -10,6 +11,8 @@ from services.email_preflight import (
     temporary_send_block_reason,
     validate_lead_before_send,
 )
+from services.outbound_engine import _mark_lead_suppressed
+from services.outbound_engine import send_lead_email
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +79,29 @@ def test_validate_lead_before_send_respects_suppression(db_session):
     assert validate_lead_before_send(lead, db_session) == "suppressed:unsubscribe:buyer@example.com"
 
 
+def test_manual_review_cannot_bypass_workflow_hard_pause(db_session):
+    _, workflow, lead = _lead(
+        db_session,
+        email_validation_status="valid",
+        email_verified=True,
+    )
+    workflow.email_sending_paused = True
+    workflow.email_pause_reason = "safety_lock"
+    db_session.commit()
+
+    result = asyncio.run(
+        send_lead_email(
+            lead,
+            workflow,
+            db_session,
+            manual_reviewed=True,
+            charge_credits=False,
+        )
+    )
+
+    assert result == {"success": False, "message": "Sending paused: safety_lock"}
+
+
 def test_quality_gate_reason_checks_score_and_verification(db_session, monkeypatch):
     _, _, lead = _lead(db_session, fit_score=40)
     monkeypatch.setenv("EMAIL_REQUIRE_MIN_FIT_SCORE", "true")
@@ -115,18 +141,44 @@ def test_temporary_send_block_reason_checks_domain_cooldown(db_session):
         lead,
         db_session,
         now=datetime(2026, 6, 5, 12, tzinfo=timezone.utc),
+        require_timezone=False,
     )
 
     assert reason == "domain_cooldown"
 
 
-def test_is_lead_sendable_now_combines_all_gates(db_session):
+def test_is_lead_sendable_now_combines_all_gates(db_session, monkeypatch):
+    monkeypatch.setenv("EMAIL_REQUIRE_RECIPIENT_TIMEZONE", "false")
     _, _, lead = _lead(db_session, email="buyer@example.com", email_validation_status="valid")
+    db_session.add(models.LeadBrief(
+        lead_id=lead.id,
+        research_status="valid",
+        specific_products="Bedding collection",
+        personalization_hook="The company launched a new bedding collection.",
+    ))
+    db_session.commit()
 
     assert is_lead_sendable_now(lead, db_session) == (True, None)
 
     lead.status = "rejected"
     assert is_lead_sendable_now(lead, db_session) == (False, "lead_status_rejected")
+
+
+def test_preflight_block_preserves_contacted_lifecycle(db_session):
+    _, _, lead = _lead(db_session, email="buyer@example.com", email_validation_status="unknown")
+    lead.status = "sent"
+    db_session.add(models.EmailLog(
+        lead_id=lead.id,
+        direction="outbound",
+        from_email="sender@example.com",
+        to_email=lead.email,
+    ))
+    db_session.commit()
+
+    _mark_lead_suppressed(lead, "email_not_verified(unknown)", db_session)
+
+    assert lead.status == "sent"
+    assert lead.automation_block_reason == "email_not_verified(unknown)"
 
 
 def test_is_email_good_for_lead_rejects_junk_and_domain_mismatch(monkeypatch):

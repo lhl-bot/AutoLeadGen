@@ -22,11 +22,14 @@ def test_clearly_off_target_company_is_skipped():
     assert _lead_worth_email_lookup("Beintoo", "Manager", WF15_TOKENS) is False
 
 
-def test_blank_company_is_allowed_lenient():
-    # No info to judge on -> don't silently drop; allow (lead parks as needs_email if no email).
-    assert _lead_worth_email_lookup("", "", WF15_TOKENS) is True
-    assert _lead_worth_email_lookup(None, None, WF15_TOKENS) is True
+def test_blank_company_is_kept_for_review_without_paid_lookup():
+    assert _lead_worth_email_lookup("", "", WF15_TOKENS) is False
+    assert _lead_worth_email_lookup(None, None, WF15_TOKENS) is False
 
 
 def test_no_tokens_means_no_gating():
     assert _lead_worth_email_lookup("Hewlett Packard Enterprise", "CEO", []) is True
+
+
+def test_on_target_company_with_wrong_role_is_not_worth_paid_lookup():
+    assert _lead_worth_email_lookup("Acme Padel Club", "Software Engineer", WF15_TOKENS) is False

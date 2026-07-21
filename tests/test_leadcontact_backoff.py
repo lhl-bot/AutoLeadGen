@@ -96,6 +96,27 @@ def test_leadcontact_search_dedupes_results_and_stores_next_page_cursor(db_sessi
     assert oe._leadcontact_cursor[wf.id]["token"] == "page-2"
 
 
+def test_leadcontact_caps_contacts_per_company(db_session, monkeypatch):
+    wf = _make_workflow(db_session)
+    monkeypatch.setenv("LEADCONTACT_MAX_CONTACTS_PER_COMPANY", "2")
+    employees = [
+        {
+            "fullName": f"Buyer {i}",
+            "title": "Owner",
+            "companyName": "Acme Padel",
+            "email": f"buyer{i}@acme.example",
+            "linkedinUrl": f"https://linkedin.example/in/buyer-{i}",
+        }
+        for i in range(3)
+    ]
+
+    stats = oe._leadcontact_search_and_extract(wf.id, _FakeLC(employees=employees), batch_lead_limit=5)
+
+    assert stats["new_leads"] == 2
+    assert stats["rejected_leads"] == 1
+    assert db_session.query(models.Lead).filter(models.Lead.workflow_id == wf.id).count() == 2
+
+
 def test_search_entry_stops_when_total_lead_cap_is_reached(db_session, monkeypatch):
     wf = _make_workflow(db_session)
     monkeypatch.setenv("SEARCH_WORKFLOW_TOTAL_TARGET", "3")
@@ -152,6 +173,40 @@ def test_search_entry_stops_when_bad_lead_ratio_is_too_high(db_session, monkeypa
     assert "bad lead ratio" in stats["reason"]
 
 
+def test_bad_ratio_excludes_leads_with_outbound_history(db_session, monkeypatch):
+    wf = _make_workflow(db_session)
+    monkeypatch.setenv("SEARCH_STOP_BAD_RATIO_MIN_LEADS", "5")
+    monkeypatch.setenv("SEARCH_STOP_BAD_RATIO", "0.80")
+    monkeypatch.setenv("SEARCH_WORKFLOW_TOTAL_TARGET", "1000")
+    for i in range(9):
+        lead = models.Lead(
+            workflow_id=wf.id,
+            company_name=f"Previously contacted {i}",
+            email=f"buyer{i}@example.com",
+            status="needs_email",
+        )
+        db_session.add(lead)
+        db_session.flush()
+        db_session.add(models.EmailLog(
+            lead_id=lead.id,
+            direction="outbound",
+            from_email="sender@example.com",
+            to_email=lead.email,
+        ))
+    db_session.add(models.Lead(
+        workflow_id=wf.id,
+        company_name="New candidate",
+        status="found",
+    ))
+    db_session.commit()
+
+    counts = oe._workflow_search_counts(wf.id, db_session)
+
+    assert counts["total_search_count"] == 1
+    assert counts["blocked_count"] == 0
+    assert oe._workflow_search_stop_reason(wf.id, db_session, total_target=1000) is None
+
+
 def test_leadcontact_daily_search_contact_budget_blocks_paid_search(db_session, monkeypatch):
     wf = _make_workflow(db_session)
     monkeypatch.setenv("LEADCONTACT_MAX_SEARCH_CONTACTS_PER_DAY", "1")
@@ -189,8 +244,8 @@ def test_web_search_stops_when_snovio_is_unavailable_and_company_only_disabled(d
 
     stats = oe.search_and_extract_leads(wf.id)
 
-    assert stats["status"] == "snovio_unavailable"
-    assert "Snov.io" in stats["error"]
+    assert stats["status"] == "email_enrichment_unavailable"
+    assert "intentionally disabled" in stats["error"]
 
 
 def test_cold_followup_candidates_prioritize_verified_high_fit_leads(db_session):

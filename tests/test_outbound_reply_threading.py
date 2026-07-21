@@ -53,6 +53,13 @@ def test_automated_reply_threads_to_customer_message_not_later_bounce(db_session
     )
     db_session.add(lead)
     db_session.flush()
+    db_session.add(models.LeadBrief(
+        lead_id=lead.id,
+        research_status="valid",
+        company_overview="Client sells home textiles.",
+        specific_products="Bedding and duvet covers",
+        personalization_hook="Client recently expanded its duvet cover range.",
+    ))
     db_session.add_all([
         models.EmailLog(
             lead_id=lead.id,
@@ -79,7 +86,12 @@ def test_automated_reply_threads_to_customer_message_not_later_bounce(db_session
     ])
     db_session.commit()
 
-    result = asyncio.run(outbound_engine.send_lead_email(lead, workflow, db_session))
+    result = asyncio.run(outbound_engine.send_lead_email(
+        lead,
+        workflow,
+        db_session,
+        manual_reviewed=True,
+    ))
 
     assert result["success"] is True
     assert captured["in_reply_to"] == "<customer-reply@example.com>"

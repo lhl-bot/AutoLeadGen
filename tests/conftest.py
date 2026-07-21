@@ -2,8 +2,12 @@ import os
 
 os.environ["AUTOLEADGEN_ENV"] = "test"
 os.environ["DATABASE_URL"] = "sqlite+pysqlite://"
-os.environ["JWT_SECRET_KEY"] = "test-secret"
+os.environ["JWT_SECRET_KEY"] = "test-secret-that-is-at-least-32-bytes"
 os.environ["AUTH_USER_CACHE_TTL_SECONDS"] = "0"
+# Existing unit tests exercise isolated V2 domain behavior directly.  Owner
+# path enforcement has dedicated tests that explicitly turn this test-only
+# bypass off; the bypass is ignored outside AUTOLEADGEN_ENV=test.
+os.environ["PRODUCT_V2_OWNER_PATH_TEST_BYPASS"] = "1"
 
 import pytest
 

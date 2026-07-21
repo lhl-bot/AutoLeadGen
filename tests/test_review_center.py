@@ -37,6 +37,7 @@ def test_review_center_returns_owned_operational_queues(db_session):
     db_session.add_all([
         models.Lead(workflow_id=workflow.id, domain="draft.example", status="drafted", ai_draft="Hi"),
         models.Lead(workflow_id=workflow.id, domain="missing.example", status="needs_email"),
+        models.Lead(workflow_id=workflow.id, domain="research.example", status="needs_research"),
         models.Lead(workflow_id=workflow.id, domain="failed.example", status="send_failed", ai_draft="Hi"),
         models.Lead(
             workflow_id=workflow.id,
@@ -53,10 +54,12 @@ def test_review_center_returns_owned_operational_queues(db_session):
     assert result["counts"] == {
         "drafted": 1,
         "needs_email": 1,
+        "needs_research": 1,
         "send_failed": 1,
         "high_intent": 1,
     }
     assert result["queues"]["drafted"][0].domain == "draft.example"
+    assert result["queues"]["needs_research"][0].domain == "research.example"
 
 
 def test_bulk_actions_reject_drafts_and_retry_failed_sends(db_session):
@@ -116,7 +119,7 @@ def test_bulk_send_isolates_failures_and_preserves_ownership(db_session, monkeyp
     db_session.add_all([sendable, missing_email, other])
     db_session.commit()
 
-    async def fake_send(lead, _workflow, db, raise_on_credit_error=False):
+    async def fake_send(lead, _workflow, db, **kwargs):
         lead.status = "sent"
         db.commit()
 
@@ -147,7 +150,7 @@ def test_bulk_send_reports_send_result_message(db_session, monkeypatch):
     db_session.add(blocked)
     db_session.commit()
 
-    async def fake_send(lead, _workflow, db, raise_on_credit_error=False):
+    async def fake_send(lead, _workflow, db, **kwargs):
         return {"success": False, "message": "All active sender email accounts have reached their daily caps"}
 
     monkeypatch.setattr("services.outbound_engine.send_lead_email", fake_send)

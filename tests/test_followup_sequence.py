@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from pydantic import ValidationError
 
 import schemas
@@ -48,6 +49,12 @@ def test_instruction_for_round():
     raw = [{"day_offset": 1, "instruction": "send case study"}]
     assert fs.instruction_for_round(raw, 1) == "send case study"
     assert fs.instruction_for_round(raw, 2) is None
+
+
+def test_due_at_for_round_counts_business_days():
+    friday = datetime(2026, 7, 10, 10, tzinfo=timezone.utc)
+    due = fs.due_at_for_round(friday, [{"day_offset": 4}], 1, 72)
+    assert due == datetime(2026, 7, 16, 10, tzinfo=timezone.utc)
 
 
 def test_schema_rejects_out_of_range_day_offset():

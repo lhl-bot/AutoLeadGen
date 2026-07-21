@@ -49,6 +49,28 @@ def test_record_send_success_marks_sent_and_creates_email_log(db_session):
     assert email_log.from_email == "sender@example.com"
     assert email_log.to_email == lead.email
     assert email_log.message_id == "<msg@example.com>"
+    assert lead.followup_count == 0
+
+
+def test_record_send_success_increments_only_successful_followups(db_session):
+    lead = _lead(db_session)
+    record_send_success(
+        db_session,
+        lead,
+        from_email="sender@example.com",
+        subject="Initial",
+        body="Body",
+    )
+    assert lead.followup_count == 0
+
+    record_send_success(
+        db_session,
+        lead,
+        from_email="sender@example.com",
+        subject="Follow-up",
+        body="Body",
+    )
+    assert lead.followup_count == 1
 
 
 def test_record_send_failure_increments_without_changing_status_until_threshold(db_session):

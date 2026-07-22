@@ -22,25 +22,24 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/v2/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'isolated e2e' }) }));
 });
 
-test('exposes the seven task-oriented Product V2 destinations without static health claims', async ({ page }) => {
+test('exposes the four task-oriented Product V2 destinations without static health claims', async ({ page }) => {
   // WHEN: The user opens the daily workbench.
   await page.goto('/dashboard');
 
-  // THEN: All seven primary destinations are present and explicit demo fallback is marked.
+  // THEN: All four primary destinations are present and explicit demo fallback is marked.
   const navigation = page.getByRole('complementary', { name: '主导航' });
-  for (const label of ['今日工作', '找客户', '客户', '触达计划', '收件箱', '商机', '分析']) {
+  for (const label of ['工作台', '客户', '对话', '结果']) {
     await expect(navigation.getByRole('link', { name: label, exact: true })).toBeVisible();
   }
   await expect(page.getByRole('heading', { name: '今日工作' })).toBeVisible();
   await expect(page.getByText('示例数据').first()).toBeVisible();
   await expect(page.getByText(/System Online/i)).toHaveCount(0);
 
-  // WHEN: The user navigates to the opportunity board.
-  await navigation.getByRole('link', { name: '商机' }).click();
+  // WHEN: The user navigates to the results page.
+  await navigation.getByRole('link', { name: '结果' }).click();
 
-  // THEN: The Product V2 opportunity definition is visible.
+  // THEN: The Product V2 opportunities page is visible.
   await expect(page.getByRole('heading', { name: '商机', exact: true })).toBeVisible();
-  await expect(page.getByText(/AI 只能提议/)).toBeVisible();
 });
 
 test('supports keyboard entry and a mobile navigation drawer', async ({ page }) => {

@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
     return [
       { source: '/dashboard/work', destination: '/dashboard', permanent: false },
       { source: '/dashboard/find-customers', destination: '/dashboard/customers?view=find', permanent: false },
-      { source: '/dashboard/get-started', destination: '/dashboard/customers?view=find', permanent: false },
+      // /dashboard/get-started is the 5-step activation wizard; keep it independent
       { source: '/dashboard/campaigns', destination: '/dashboard/admin/plans', permanent: false },
       { source: '/dashboard/opportunities', destination: '/dashboard/results?view=opportunities', permanent: false },
       { source: '/dashboard/analytics', destination: '/dashboard/results?view=analytics', permanent: false },

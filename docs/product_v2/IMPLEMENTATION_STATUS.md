@@ -11,9 +11,9 @@ webhook, SMTP/IMAP call, LinkedIn call, or WhatsApp call was made. The repositor
 now contains the production deployment path; real environment execution remains
 separately gated.
 
-The current repository schema head is now `0007_acquisition_activation`. The
-`0001` → `0006` statements below describe the completed historical restored-RDS
-rehearsal. The additive `0007` revision has also passed fresh and repeated migration
+The current repository schema head is now `0008_go_live_batches_and_routes`. The
+`0001` → `0008` statements below describe the completed historical restored-RDS
+rehearsal. The additive `0008` revision has also passed fresh and repeated migration
 coverage on an isolated local MySQL 9.6 instance, including interrupted-DDL index
 repair. It has not been applied to production or the historical clone.
 

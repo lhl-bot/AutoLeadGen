@@ -23,7 +23,7 @@ database and the same fake-only safety boundary.
 
 The script generates owner-only Docker secret files under `.local/secrets`, binds MySQL
 only to `127.0.0.1:3307`, waits for its health check, and runs the complete Alembic
-chain through `0007`. Docker Desktop or another compatible Docker daemon is required.
+chain through `0008`. Docker Desktop or another compatible Docker daemon is required.
 
 Run the MySQL integration suite against a separately named test database:
 
@@ -75,7 +75,9 @@ only fake events locally.
 - `0007_acquisition_activation` adds the owner-scoped AcquisitionRun and
   AcquisitionCandidate staging workspace used by CSV and AI acquisition. It does
   not change existing Company, Contact, Campaign, Enrollment, or Attempt rows.
-- All seven revisions preserve application data; the `0006` downgrade additionally
+- `0008_go_live_batches_and_routes` adds go-live review batches, frozen
+  consent, and task scoped routes required by the controlled Email canary.
+- All eight revisions preserve application data; the `0006` downgrade additionally
   refuses to run while complaint evidence exists.
 - MySQL migrations use a zero-wait advisory lock and fail if another migrator is active.
 

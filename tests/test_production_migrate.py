@@ -7,7 +7,7 @@ import pytest
 from scripts import production_migrate
 
 
-HEAD = "0007_acquisition_activation"
+HEAD = "0008_go_live_batches_and_routes"
 FINGERPRINT = "a" * 64
 
 
